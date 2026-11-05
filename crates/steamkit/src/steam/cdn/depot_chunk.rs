@@ -20,8 +20,7 @@
 use std::io::Cursor;
 
 use aes::cipher::{
-    block_padding::Pkcs7, generic_array::GenericArray, BlockDecrypt, BlockDecryptMut, KeyInit,
-    KeyIvInit,
+    block_padding::Pkcs7, Block, BlockCipherDecrypt, BlockModeDecrypt, KeyInit, KeyIvInit,
 };
 
 use crate::error::SteamError;
@@ -70,12 +69,14 @@ impl DepotChunk {
             )));
         }
 
-        let cipher = aes::Aes256::new(GenericArray::from_slice(depot_key));
+        let cipher = aes::Aes256::new_from_slice(depot_key)
+            .map_err(|_| SteamError::Crypto("Invalid depot key.".to_string()))?;
 
         // The first 16 bytes are the ECB-encrypted IV.
         let mut iv = [0u8; AES_BLOCK_SIZE];
         {
-            let mut block = GenericArray::clone_from_slice(&data[..AES_BLOCK_SIZE]);
+            let mut block = Block::<aes::Aes256>::default();
+            block.copy_from_slice(&data[..AES_BLOCK_SIZE]);
             cipher.decrypt_block(&mut block);
             iv.copy_from_slice(block.as_slice());
         }
@@ -95,7 +96,7 @@ impl DepotChunk {
                 .map_err(|_| SteamError::Crypto("Invalid depot key.".to_string()))?;
 
             let plaintext = decryptor
-                .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+                .decrypt_padded::<Pkcs7>(&mut buffer)
                 .map_err(|_| SteamError::Crypto("Failed to decrypt the depot chunk.".to_string()))?;
 
             plaintext.len()

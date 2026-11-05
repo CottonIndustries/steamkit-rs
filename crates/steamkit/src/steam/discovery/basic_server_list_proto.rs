@@ -1,11 +1,11 @@
-//! The on-disk format of a cached server list.
+//! The payload of one cached server list entry.
 //!
-//! It's a sequence of length-prefixed protobuf messages, the same as SteamKit2
-//! writes, so the cache files are interchangeable:
+//! The repeated field 1 envelope that wraps a whole list lives in
+//! [`super::basic_server_list`]; each of its entries is one of these
+//! length-prefixed protobuf messages, the same as SteamKit2 writes, so the
+//! cache files are interchangeable:
 //!
 //! ```text
-//! file  := item*
-//! item  := 0x0A varint(len) payload      // field 1, length delimited
 //! payload:= field1 address | field2 port | field3 protocols
 //! field1 := 0x0A varint(len) utf8-bytes  // string
 //! field2 := 0x10 varint(port)            // int32
@@ -126,47 +126,11 @@ impl BasicServerListProto {
 
         Ok(result)
     }
-
-    /// Encodes a list of entries in the file format above.
-    pub(crate) fn encode_list(items: &[BasicServerListProto]) -> Vec<u8> {
-        let mut out = Vec::new();
-
-        for item in items {
-            let payload = item.encode();
-            write_tag(&mut out, 1, WireType::LengthDelimited);
-            write_varint(&mut out, payload.len() as u64);
-            out.extend_from_slice(&payload);
-        }
-
-        out
-    }
-
-    /// Decodes a list of entries in the file format above.
-    pub(crate) fn decode_list(data: &[u8]) -> Result<Vec<Self>, SteamError> {
-        let mut result = Vec::new();
-        let mut cursor = Cursor::new(data);
-
-        while !cursor.is_empty() {
-            let tag = cursor.read_varint()?;
-            let field = tag >> 3;
-            let wire_type = WireType::from_tag(tag)?;
-
-            if field == 1 && wire_type == WireType::LengthDelimited {
-                let length = cursor.read_varint()? as usize;
-                let bytes = cursor.read_bytes(length)?;
-                result.push(BasicServerListProto::decode(bytes)?);
-            } else {
-                cursor.skip(wire_type)?;
-            }
-        }
-
-        Ok(result)
-    }
 }
 
 /// The protobuf wire types used here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WireType {
+pub(crate) enum WireType {
     Varint,
     Fixed64,
     LengthDelimited,
@@ -176,7 +140,7 @@ enum WireType {
 }
 
 impl WireType {
-    fn from_tag(tag: u64) -> Result<Self, SteamError> {
+    pub(crate) fn from_tag(tag: u64) -> Result<Self, SteamError> {
         match tag & 0x07 {
             0 => Ok(WireType::Varint),
             1 => Ok(WireType::Fixed64),
@@ -200,7 +164,7 @@ impl WireType {
 }
 
 /// Writes a protobuf tag byte.
-fn write_tag(out: &mut Vec<u8>, field: u64, wire_type: WireType) {
+pub(crate) fn write_tag(out: &mut Vec<u8>, field: u64, wire_type: WireType) {
     let wire = match wire_type {
         WireType::Varint => 0u64,
         WireType::Fixed64 => 1,
@@ -214,7 +178,7 @@ fn write_tag(out: &mut Vec<u8>, field: u64, wire_type: WireType) {
 }
 
 /// Writes a base-128 varint.
-fn write_varint(out: &mut Vec<u8>, mut value: u64) {
+pub(crate) fn write_varint(out: &mut Vec<u8>, mut value: u64) {
     loop {
         let byte = (value & 0x7F) as u8;
         value >>= 7;
@@ -227,21 +191,21 @@ fn write_varint(out: &mut Vec<u8>, mut value: u64) {
 }
 
 /// A minimal protobuf reader.
-struct Cursor<'a> {
+pub(crate) struct Cursor<'a> {
     data: &'a [u8],
     position: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         Cursor { data, position: 0 }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.position >= self.data.len()
     }
 
-    fn read_varint(&mut self) -> Result<u64, SteamError> {
+    pub(crate) fn read_varint(&mut self) -> Result<u64, SteamError> {
         let mut result: u64 = 0;
         let mut shift = 0;
 
@@ -272,7 +236,7 @@ impl<'a> Cursor<'a> {
         Ok(result)
     }
 
-    fn read_bytes(&mut self, length: usize) -> Result<&'a [u8], SteamError> {
+    pub(crate) fn read_bytes(&mut self, length: usize) -> Result<&'a [u8], SteamError> {
         let end = self.position.checked_add(length).ok_or_else(|| {
             SteamError::Malformed("Protobuf length overflow".to_string())
         })?;
@@ -288,7 +252,7 @@ impl<'a> Cursor<'a> {
         Ok(bytes)
     }
 
-    fn skip(&mut self, wire_type: WireType) -> Result<(), SteamError> {
+    pub(crate) fn skip(&mut self, wire_type: WireType) -> Result<(), SteamError> {
         match wire_type {
             WireType::Varint => {
                 self.read_varint()?;

@@ -19,7 +19,7 @@ tracing-subscriber.workspace = true
 serde_json.workspace = true
 sha1 = "0.10"
 # Only needed to name `reqwest::Method` for `call_with_method`.
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 [[bin]]
 name = "000_authentication"

@@ -1,3 +1,4 @@
+pub mod basic_server_list;
 pub mod basic_server_list_proto;
 pub mod file_storage_server_list_provider;
 pub mod i_server_list_provider;

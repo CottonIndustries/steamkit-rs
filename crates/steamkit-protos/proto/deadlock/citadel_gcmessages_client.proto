@@ -3,6 +3,7 @@ import "gcsdk_gcmessages.proto";
 import "citadel_gcmessages_common.proto";
 import "google/protobuf/descriptor.proto";
 
+
 enum EGCCitadelClientMessages {
 	k_EMsgClientToGCStartMatchmaking = 9010;
 	k_EMsgClientToGCStartMatchmakingResponse = 9011;
@@ -397,6 +398,8 @@ message CSOAccountHeroInfo {
 	optional uint32 wins = 4;
 	optional uint32 hero_xp = 6 ;
 	optional uint32 brawl_wins = 7;
+	optional uint32 losses = 8;
+	optional uint32 brawl_losses = 9;
 }
 
 message CSOAccountChallenge {

@@ -3,7 +3,7 @@
 //! The library has a single scalar implementation, so the tests meant for
 //! SIMD paths compare it against the simple [`reference_scalar`] below.
 
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use steamkit::util::adler32::Adler32;
 
 /// The largest prime smaller than 65536.
@@ -171,7 +171,7 @@ fn matches_reference(length: usize) {
     const SEED: u32 = 0;
 
     let mut data = vec![0u8; length];
-    rand::thread_rng().fill_bytes(&mut data);
+    rand::rng().fill_bytes(&mut data);
 
     let expected = reference_implementation(SEED, &data);
     let actual = Adler32::calculate(SEED, &data);
@@ -224,10 +224,10 @@ fn vectorized_matches_scalar() {
     for &length in VECTORIZED_LENGTHS {
         let mut random = rand::rngs::StdRng::seed_from_u64(length as u64);
         let mut data = vec![0u8; length];
-        rand::RngCore::fill_bytes(&mut random, &mut data);
+        rand::Rng::fill_bytes(&mut random, &mut data);
 
-        let seed = ((rand::Rng::gen_range(&mut random, 0..65521u32) << 16)
-            | rand::Rng::gen_range(&mut random, 0..65521u32))
+        let seed = ((rand::RngExt::random_range(&mut random, 0..65521u32) << 16)
+            | rand::RngExt::random_range(&mut random, 0..65521u32))
             & 0xFFFF_FFFF;
 
         assert_all_paths_match_scalar(seed, &data);
@@ -240,13 +240,13 @@ fn vectorized_matches_scalar() {
 fn vectorized_matches_scalar_on_random_slices() {
     let mut random = rand::rngs::StdRng::seed_from_u64(1950);
     let mut data = vec![0u8; 20000];
-    rand::RngCore::fill_bytes(&mut random, &mut data);
+    rand::Rng::fill_bytes(&mut random, &mut data);
 
     for _ in 0..500 {
-        let start = rand::Rng::gen_range(&mut random, 0..64usize);
-        let length = rand::Rng::gen_range(&mut random, 0..(data.len() - start));
-        let seed = ((rand::Rng::gen_range(&mut random, 0..65521u32) << 16)
-            | rand::Rng::gen_range(&mut random, 0..65521u32))
+        let start = rand::RngExt::random_range(&mut random, 0..64usize);
+        let length = rand::RngExt::random_range(&mut random, 0..(data.len() - start));
+        let seed = ((rand::RngExt::random_range(&mut random, 0..65521u32) << 16)
+            | rand::RngExt::random_range(&mut random, 0..65521u32))
             & 0xFFFF_FFFF;
 
         assert_all_paths_match_scalar(seed, &data[start..start + length]);

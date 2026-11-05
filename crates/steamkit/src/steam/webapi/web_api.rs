@@ -53,6 +53,8 @@ pub enum WebApiValue {
     Bytes(Vec<u8>),
     /// Left out of the request.
     Null,
+    /// A list; each item becomes `name[0]`, `name[1]`, ... in the query string.
+    List(Vec<WebApiValue>),
 }
 
 impl From<String> for WebApiValue {
@@ -367,6 +369,8 @@ impl AsyncInterface {
         version: i32,
         args: &[WebApiArgument],
     ) -> Result<KeyValue, SteamError> {
+        throw_if_unexpected_format(args, "vdf", "args", "call_with_method")?;
+
         let response = self.call_internal(method, func, version, args, "vdf").await?;
         let body = response
             .bytes()
@@ -398,6 +402,8 @@ impl AsyncInterface {
     where
         T: prost::Message + Default,
     {
+        throw_if_unexpected_format(args, "protobuf_raw", "args", "call_protobuf")?;
+
         let response = self
             .call_internal(method, func, version, args, "protobuf_raw")
             .await?;
@@ -424,6 +430,13 @@ impl AsyncInterface {
         TResponse: prost::Message + Default,
         TRequest: prost::Message + Default,
     {
+        throw_if_unexpected_format(
+            extra_args,
+            "protobuf_raw",
+            "extra_args",
+            "call_protobuf_with_request",
+        )?;
+
         let base64 = BASE64_STANDARD.encode(request.encode_to_vec());
 
         let mut args: WebApiArgs = Vec::with_capacity(extra_args.len() + 1);
@@ -478,12 +491,13 @@ impl AsyncInterface {
                 .unwrap_or(WebApiValue::Null);
 
             match format {
-                WebApiValue::Text(text) if text == expected_format => {}
+                WebApiValue::Text(text) if text == "vdf" || text == "protobuf_raw" => {}
                 other => {
                     let text = match other {
                         WebApiValue::Text(text) => text,
                         WebApiValue::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                         WebApiValue::Null => String::new(),
+                        WebApiValue::List(_) => String::new(),
                     };
 
                     return Err(SteamError::InvalidArgument(format!(
@@ -540,7 +554,8 @@ impl AsyncInterface {
 }
 
 /// Builds the query string: the API key first, then the format (unless the
-/// caller passed one), then every argument as `&name=value`.
+/// caller passed one), then every argument. A list argument becomes
+/// `name[0]=a&name[1]=b`; every other argument becomes `name=value`.
 fn build_params(
     api_key: &str,
     expected_format: &str,
@@ -552,27 +567,69 @@ fn build_params(
     if !api_key.is_empty() && !args.iter().any(|argument| argument.name == "key") {
         params.push_str("key=");
         params.push_str(&escape_data_string(api_key));
-        params.push('&');
     }
 
     if !format_provided {
+        append_separator(&mut params);
         params.push_str("format=");
         params.push_str(expected_format);
     }
 
     for argument in args {
-        params.push('&');
-        params.push_str(&escape_data_string(&argument.name));
-        params.push('=');
+        if let WebApiValue::List(items) = &argument.value {
+            for (index, item) in items.iter().enumerate() {
+                append_parameter(&mut params, &format!("{}[{index}]", argument.name), item);
+            }
 
-        match &argument.value {
-            WebApiValue::Null => {}
-            WebApiValue::Bytes(bytes) => params.push_str(&url_encode_bytes(bytes)),
-            WebApiValue::Text(text) => params.push_str(&escape_data_string(text)),
+            continue;
         }
+
+        append_parameter(&mut params, &argument.name, &argument.value);
     }
 
     params
+}
+
+fn append_separator(params: &mut String) {
+    if !params.is_empty() {
+        params.push('&');
+    }
+}
+
+fn append_parameter(params: &mut String, name: &str, value: &WebApiValue) {
+    append_separator(params);
+    params.push_str(&escape_data_string(name));
+    params.push('=');
+
+    match value {
+        WebApiValue::Null => {}
+        WebApiValue::Bytes(bytes) => params.push_str(&url_encode_bytes(bytes)),
+        WebApiValue::Text(text) => params.push_str(&escape_data_string(text)),
+        WebApiValue::List(_) => {}
+    }
+}
+
+fn throw_if_unexpected_format(
+    args: &[WebApiArgument],
+    expected_format: &str,
+    parameter_name: &str,
+    caller: &str,
+) -> Result<(), SteamError> {
+    let Some(argument) = args.iter().find(|argument| argument.name == "format") else {
+        return Ok(());
+    };
+
+    let WebApiValue::Text(text) = &argument.value else {
+        return Ok(());
+    };
+
+    if text == expected_format {
+        return Ok(());
+    }
+
+    Err(SteamError::InvalidArgument(format!(
+        "Unsupported 'format' value: {text} when calling {caller}. Format must either be '{expected_format}' or omitted. (Parameter: '{parameter_name}')"
+    )))
 }
 
 /// Escapes a string like `Uri.EscapeDataString`.

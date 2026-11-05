@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use rand::RngCore;
+use rand::Rng;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Oaep, RsaPublicKey};
 use sha1::Sha1;
@@ -357,7 +357,7 @@ async fn handle_encrypt_request(shared: &Arc<EnvelopeShared>, data: &[u8]) {
     };
 
     let mut temp_session_key = [0u8; SESSION_KEY_LENGTH];
-    rand::thread_rng().fill_bytes(&mut temp_session_key);
+    rand::rng().fill_bytes(&mut temp_session_key);
 
     let mut blob_to_encrypt = Vec::with_capacity(SESSION_KEY_LENGTH + random_challenge.len());
     blob_to_encrypt.extend_from_slice(&temp_session_key);
@@ -454,7 +454,7 @@ fn rsa_encrypt_oaep_sha1(
         .map_err(|err| SteamError::Crypto(format!("invalid RSA public key: {err}")))?;
 
     let padding = Oaep::new::<Sha1>();
-    let mut rng = rand::thread_rng();
+    let mut rng = rsa::rand_core::OsRng;
 
     key.encrypt(&mut rng, padding, blob_to_encrypt)
         .map_err(|err| SteamError::Crypto(format!("RSA encryption failed: {err}")))

@@ -4,6 +4,7 @@ import "base_gcmessages.proto";
 import "citadel_gcmessages_common.proto";
 import "google/protobuf/descriptor.proto";
 
+
 enum EGCCitadelServerMessages {
 	k_EMsgServerToGCMatchSignoutPermission = 10012;
 	k_EMsgServerToGCMatchSignoutPermissionResponse = 10013;
@@ -683,6 +684,7 @@ message CMsgMatchData {
 		optional uint32 flags = 5;
 		optional uint32 imbued_ability_id = 6;
 		optional uint32 upgrade_info = 7 ;
+		optional uint32 purchase_source = 8;
 	}
 
 	message AuxStat {

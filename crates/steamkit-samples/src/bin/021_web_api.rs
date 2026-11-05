@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use steamkit::steam::webapi::web_api::{web_api_args, Interface, WebAPI, WebApiValue};
+use steamkit::steam::webapi::web_api::{web_api_args, WebAPI, WebApiValue};
 use steamkit::types::key_value::KeyValue;
 
 /// Prints the title of every news item of a response.
@@ -98,15 +98,6 @@ async fn main() -> Result<()> {
             println!("Unable to make AuthenticateUser API Request: {error}");
         }
     }
-
-    // parameters can also be passed as plain strings
-    let steam_news: Interface = WebAPI::get_interface("ISteamNews", "");
-
-    let news_args = web_api_args([("appid", WebApiValue::Text("440".to_string()))]);
-
-    let results = steam_news.call("GetNewsForApp", 1, &news_args).await?;
-
-    print_news(results.get("newsitems").get("newsitem"));
 
     Ok(())
 }

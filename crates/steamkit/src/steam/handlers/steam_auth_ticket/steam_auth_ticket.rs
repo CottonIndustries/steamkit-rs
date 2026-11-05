@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rand::RngCore;
+use rand::Rng;
 use steamkit_protos::steam::{
     CMsgAuthTicket, CMsgClientAuthList, CMsgClientAuthListAck, CMsgClientGameConnectTokens,
     CMsgClientTicketAuthComplete,
@@ -376,7 +376,7 @@ fn combine_tickets(auth_ticket: &[u8], app_ticket: &[u8], pad_to_web_api_size: b
 /// `len` random bytes.
 fn random_bytes(len: usize) -> Vec<u8> {
     let mut buffer = vec![0u8; len];
-    rand::thread_rng().fill_bytes(&mut buffer);
+    rand::rng().fill_bytes(&mut buffer);
     buffer
 }
 

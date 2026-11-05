@@ -7,7 +7,7 @@ use std::path::{Path, MAIN_SEPARATOR};
 use std::time::UNIX_EPOCH;
 
 use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::BlockDecryptMut;
+use aes::cipher::BlockModeDecrypt;
 use aes::cipher::KeyInit;
 use aes::Aes256;
 use base64::Engine;
@@ -596,13 +596,14 @@ fn decrypt_name(name: &str, encryption_key: &[u8]) -> Option<String> {
 
     let cipher = Aes256::new_from_slice(encryption_key).ok()?;
 
-    let mut iv = aes::cipher::Block::<Aes256>::clone_from_slice(&decoded[..16]);
-    <Aes256 as aes::cipher::BlockDecrypt>::decrypt_block(&cipher, &mut iv);
+    let mut iv = aes::cipher::Block::<Aes256>::default();
+    iv.copy_from_slice(&decoded[..16]);
+    <Aes256 as aes::cipher::BlockCipherDecrypt>::decrypt_block(&cipher, &mut iv);
 
     let decryptor = cbc::Decryptor::<Aes256>::new_from_slices(encryption_key, &iv).ok()?;
 
     let mut buffer = decoded[16..].to_vec();
-    let plaintext_len = decryptor.decrypt_padded_mut::<Pkcs7>(&mut buffer).ok()?.len();
+    let plaintext_len = decryptor.decrypt_padded::<Pkcs7>(&mut buffer).ok()?.len();
 
     // Trim the trailing null byte of the plaintext.
     let mut filename_length = plaintext_len;

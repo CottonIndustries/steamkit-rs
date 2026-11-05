@@ -1,8 +1,7 @@
 //! The symmetric crypto used in Steam's protocols.
 
 use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockDecryptMut, KeyInit, KeyIvInit};
-use aes::cipher::generic_array::GenericArray;
+use aes::cipher::{Block, BlockModeDecrypt, KeyInit, KeyIvInit};
 use cbc::Decryptor as CbcDecryptor;
 use ecb::Decryptor as EcbDecryptor;
 
@@ -57,8 +56,9 @@ impl CryptoHelper {
             let mut decryptor = EcbDecryptor::<aes::Aes256>::new_from_slice(key)
                 .map_err(|_| SteamError::Crypto("Invalid AES-256 key.".to_string()))?;
 
-            let mut block = GenericArray::clone_from_slice(&input[..BLOCK_SIZE]);
-            decryptor.decrypt_block_mut(&mut block);
+            let mut block = Block::<aes::Aes256>::default();
+            block.copy_from_slice(&input[..BLOCK_SIZE]);
+            decryptor.decrypt_block(&mut block);
             iv.copy_from_slice(block.as_slice());
         }
 
@@ -79,7 +79,7 @@ impl CryptoHelper {
             .map_err(|_| SteamError::Crypto("Invalid AES-256 key or IV.".to_string()))?;
 
         let plaintext = decryptor
-            .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+            .decrypt_padded::<Pkcs7>(&mut buffer)
             .map_err(|_| SteamError::Crypto("Failed to decrypt the payload.".to_string()))?;
 
         Ok(plaintext.to_vec())

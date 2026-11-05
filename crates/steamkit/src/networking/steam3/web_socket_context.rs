@@ -301,7 +301,7 @@ impl WebSocketSocket for TungsteniteWebSocketSocket {
                 message_type: WebSocketMessageType::Binary,
             }),
             Some(Ok(Message::Text(text))) => Ok(WebSocketReceive {
-                data: text.into_bytes().into(),
+                data: Bytes::copy_from_slice(text.as_str().as_bytes()),
                 end_of_message: true,
                 message_type: WebSocketMessageType::Text,
             }),

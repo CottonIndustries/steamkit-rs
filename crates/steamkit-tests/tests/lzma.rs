@@ -7,7 +7,7 @@
 
 mod common;
 
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 
 use steamkit::error::SteamError;
 use steamkit::steam::cdn::depot_chunk::DepotChunk;

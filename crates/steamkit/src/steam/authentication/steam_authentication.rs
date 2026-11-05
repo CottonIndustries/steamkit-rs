@@ -503,7 +503,7 @@ fn encrypt_password(
         AuthenticationException::other(format!("Failed to import the RSA public key: {error}"))
     })?;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rsa::rand_core::OsRng;
 
     key.encrypt(&mut rng, Pkcs1v15Encrypt, password.as_bytes())
         .map_err(|error| {

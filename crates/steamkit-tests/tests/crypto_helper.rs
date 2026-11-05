@@ -6,7 +6,7 @@ mod common;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use rand::RngCore;
+use rand::Rng;
 use steamkit::util::crypto_helper::CryptoHelper;
 
 /// The plaintext.
@@ -20,7 +20,7 @@ fn test_symmetric_encryption() {
     let key = common::sha256(ENCRYPTION_KEY.as_bytes());
 
     let mut iv = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut iv);
+    rand::rng().fill_bytes(&mut iv);
 
     let aes = common::Aes256::new(&key);
 

@@ -20,10 +20,10 @@
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{
-    BlockDecrypt, BlockDecryptMut, BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
+    BlockCipherDecrypt, BlockCipherEncrypt, BlockModeDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit,
 };
 use hmac::{Hmac, Mac};
-use rand::RngCore;
+use rand::Rng;
 use sha1::Sha1;
 
 use crate::error::SteamError;
@@ -147,7 +147,7 @@ impl NetFilterEncryptionWithHMAC {
             NetFilterEncryptionWithHMAC::INITIALIZATION_VECTOR_LENGTH
                 - NetFilterEncryptionWithHMAC::INITIALIZATION_VECTOR_RANDOM_LENGTH;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         rng.fill_bytes(
             &mut iv[hash_length..],
         );
@@ -234,7 +234,7 @@ impl NetFilterEncryptionWithHMAC {
             .map_err(|_| SteamError::Crypto("invalid AES key or IV length".to_string()))?;
 
         let cipher_text = encryptor
-            .encrypt_padded_b2b_mut::<Pkcs7>(plain_text, output)
+            .encrypt_padded_b2b::<Pkcs7>(plain_text, output)
             .map_err(|_| SteamError::Crypto("AES-CBC encryption failed".to_string()))?;
 
         Ok(cipher_text.len())
@@ -256,7 +256,7 @@ impl NetFilterEncryptionWithHMAC {
 
         let mut buffer = vec![0u8; cipher_text.len()];
         let plain_text = decryptor
-            .decrypt_padded_b2b_mut::<Pkcs7>(cipher_text, &mut buffer)
+            .decrypt_padded_b2b::<Pkcs7>(cipher_text, &mut buffer)
             .map_err(|_| {
                 SteamError::Crypto("Unable to decrypt incoming packet: bad padding".to_string())
             })?;

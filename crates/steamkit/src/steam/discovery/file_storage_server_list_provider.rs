@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::SteamError;
 
-use super::basic_server_list_proto::BasicServerListProto;
+use super::basic_server_list::BasicServerList;
 use super::i_server_list_provider::IServerListProvider;
 use super::server_record::ServerRecord;
 
@@ -45,10 +45,10 @@ impl FileStorageServerListProvider {
             }
         };
 
-        let items = BasicServerListProto::decode_list(&data)?;
-        let mut servers = Vec::with_capacity(items.len());
+        let server_list = BasicServerList::decode(&data)?;
+        let mut servers = Vec::with_capacity(server_list.servers().len());
 
-        for item in &items {
+        for item in server_list.servers() {
             match item.to_server_record().await {
                 Ok(record) => servers.push(record),
                 Err(error) => {
@@ -66,12 +66,8 @@ impl FileStorageServerListProvider {
 
     /// Writes the server list to the file.
     pub async fn write_server_list(&self, endpoints: &[ServerRecord]) -> Result<(), SteamError> {
-        let items: Vec<BasicServerListProto> = endpoints
-            .iter()
-            .map(BasicServerListProto::from_server_record)
-            .collect();
-
-        let data = BasicServerListProto::encode_list(&items);
+        let server_list = BasicServerList::from_server_records(endpoints);
+        let data = server_list.encode();
 
         match tokio::fs::write(&self.filename, &data).await {
             Ok(()) => Ok(()),

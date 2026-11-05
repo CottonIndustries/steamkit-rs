@@ -32,6 +32,6 @@ prost-types.workspace = true
 
 [build-dependencies]
 prost.workspace = true
-prost-build = "0.13"
+prost-build = "0.14"
 prost-types.workspace = true
 protoc-bin-vendored = "3"
