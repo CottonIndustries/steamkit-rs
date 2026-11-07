@@ -104,8 +104,8 @@ impl SteamDirectory {
             };
 
             let record = match child.get("type").value() {
-                Some("websockets") => ServerRecord::create_websocket_server(endpoint).await?,
-                Some("netfilter") => ServerRecord::create_dns_socket_server(endpoint).await?,
+                Some("websockets") => ServerRecord::create_web_socket_server(endpoint)?,
+                Some("netfilter") => ServerRecord::create_dns_socket_server(endpoint)?,
                 // There's also a "china" type (WebSockets); we skip it.
                 _ => continue,
             };

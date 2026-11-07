@@ -26,6 +26,16 @@ cargo test --workspace --no-fail-fast
 
 The test suite needs no network access; the few live tests are `#[ignore]`d.
 
+## Platform support
+
+Windows, macOS and Linux. The library is pure Rust and forbids `unsafe`.
+
+- **Linux** needs OpenSSL headers, because the TLS backend is `native-tls`:
+  `sudo apt install libssl-dev pkg-config` (or the equivalent for your distribution).
+- **`steamkit-nethook`** is a Windows DLL injected into `Steam.exe`. Its source is `#![cfg(windows)]`
+  and its `windows` dependency is Windows-only, so the workspace builds on the other platforms too.
+- **MSRV** is 1.89, required by `aes` 0.9. The workspace uses edition 2021.
+
 ## Samples
 
 `crates/steamkit-samples` has ports of the SteamKit2 samples. The QR login one needs no password:
@@ -34,7 +44,7 @@ The test suite needs no network access; the few live tests are `#[ignore]`d.
 cargo run -p steamkit-samples --bin 001_authentication_with_qr_code
 ```
 
-Scan the code with the Steam mobile app. On Windows the console can't draw the block characters, so the code is also written to `%TEMP%\steamkit-qr-login.svg`.
+Scan the code with the Steam mobile app. The code is also written to `%TEMP%\steamkit-qr-login.svg`, which is handy if your console font has no block-drawing glyphs.
 
 Three more samples run PASS/FAIL checks against live Steam:
 

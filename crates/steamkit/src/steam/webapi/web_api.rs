@@ -27,7 +27,7 @@ use super::web_api_request_exception::WebAPIRequestException;
 pub const DEFAULT_BASE_ADDRESS: &str = "https://api.steampowered.com/";
 
 /// The default timeout used for Web API requests.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(100);
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(100);
 
 /// The characters `Uri.EscapeDataString` leaves alone: `A-Z`, `a-z`, `0-9`,
 /// `-`, `_`, `.` and `~`. `percent_encoding` has no constant for exactly this
@@ -173,7 +173,7 @@ impl WebAPI {
     }
 
     /// The default timeout used for Web API requests.
-    pub fn default_timeout() -> Duration {
+    pub(crate) fn default_timeout() -> Duration {
         DEFAULT_TIMEOUT
     }
 
@@ -253,12 +253,12 @@ impl Interface {
     }
 
     /// The async interface this wraps.
-    pub fn async_interface(&self) -> &AsyncInterface {
+    pub(crate) fn async_interface(&self) -> &AsyncInterface {
         &self.inner
     }
 
     /// The name of the Web API interface, for example `ISteamDirectory`.
-    pub fn iface(&self) -> &str {
+    pub(crate) fn iface(&self) -> &str {
         self.inner.iface()
     }
 
@@ -323,17 +323,17 @@ impl AsyncInterface {
     }
 
     /// The name of the Web API interface, for example `ISteamDirectory`.
-    pub fn iface(&self) -> &str {
+    pub(crate) fn iface(&self) -> &str {
         &self.iface
     }
 
     /// The API key used for authorized requests.
-    pub fn api_key(&self) -> &str {
+    pub(crate) fn api_key(&self) -> &str {
         &self.api_key
     }
 
     /// The base address of the Web API.
-    pub fn base_address(&self) -> &reqwest::Url {
+    pub(crate) fn base_address(&self) -> &reqwest::Url {
         &self.base_address
     }
 

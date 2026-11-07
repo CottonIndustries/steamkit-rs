@@ -422,14 +422,18 @@ impl SteamFriends {
     ) -> SteamResult<()> {
         let client = self.client()?;
 
-        let requested_info =
-            requested_info.unwrap_or_else(|| client.configuration().default_persona_state_flags());
+        let requested_info = requested_info.map(|flag| flag as u32).unwrap_or_else(|| {
+            client
+                .configuration()
+                .default_persona_state_flags_mask()
+                .bits() as u32
+        });
 
         let mut request =
             ClientMsgProtobuf::<CMsgClientRequestFriendData>::new(EMsg::ClientRequestFriendData);
 
         request.body.friends = steam_id_list.iter().map(|id| id.convert_to_u64()).collect();
-        request.body.persona_state_requested = Some(requested_info as u32);
+        request.body.persona_state_requested = Some(requested_info);
 
         client.send(&request)?;
 
@@ -574,8 +578,12 @@ impl SteamFriends {
         let mut req_info =
             ClientMsgProtobuf::<CMsgClientRequestFriendData>::new(EMsg::ClientRequestFriendData);
 
-        req_info.body.persona_state_requested =
-            Some(client.configuration().default_persona_state_flags() as u32);
+        req_info.body.persona_state_requested = Some(
+            client
+                .configuration()
+                .default_persona_state_flags_mask()
+                .bits() as u32,
+        );
 
         {
             let mut lists = self.lists.write();

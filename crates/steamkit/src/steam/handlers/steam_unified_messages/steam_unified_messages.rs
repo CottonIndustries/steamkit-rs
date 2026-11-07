@@ -222,9 +222,14 @@ impl SteamUnifiedMessages {
         service_name: impl Into<String>,
     ) -> SteamResult<Arc<UnifiedService>> {
         let client = self.client()?;
+        let service_name = service_name.into();
+
+        if let Some(service) = self.services.get(&service_name) {
+            return Ok(service.value().clone());
+        }
 
         let service = Arc::new(UnifiedService {
-            service_name: service_name.into(),
+            service_name,
             client: Arc::downgrade(&client),
             response_decoders: DashMap::new(),
             notification_decoders: DashMap::new(),

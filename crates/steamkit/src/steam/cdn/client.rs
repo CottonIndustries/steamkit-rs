@@ -44,7 +44,7 @@ impl Client {
     }
 
     /// Creates a client with a default HTTP client.
-    pub fn with_default_client() -> Result<Self, SteamError> {
+    pub(crate) fn with_default_client() -> Result<Self, SteamError> {
         let http_client = reqwest::Client::builder()
             .build()
             .map_err(|error| SteamError::Connection(error.to_string()))?;

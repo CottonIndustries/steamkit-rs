@@ -36,12 +36,10 @@ fn socket_server(ip: [u8; 4], port: u16) -> ServerRecord {
     ServerRecord::create_socket_server(SocketAddr::from((ip, port)))
 }
 
-/// A WebSocket server record. The factory resolves the host name, so it's
-/// async.
+/// A WebSocket server record.
 async fn websocket_server(host: &str, port: u16) -> ServerRecord {
-    ServerRecord::create_websocket_server(&format!("{host}:{port}"))
-        .await
-        .expect("the websocket server address should resolve")
+    ServerRecord::create_web_socket_server(&format!("{host}:{port}"))
+        .expect("the websocket server address should be valid")
 }
 
 /// Replaces the list and writes it to the provider.
@@ -57,7 +55,7 @@ fn try_mark(
     protocol_types: ProtocolTypes,
     quality: ServerQuality,
 ) -> bool {
-    list.try_mark(record.end_point(), protocol_types, quality)
+    list.try_mark(record, protocol_types, quality)
 }
 
 /// The next server candidate, which must exist.
@@ -314,7 +312,7 @@ async fn get_next_server_candidate_mark_iterate_all_candidates() {
 
         assert!(
             !candidates_returned.contains(&candidate),
-            "Candidate {} already seen",
+            "Candidate {:?} already seen",
             candidate.end_point()
         );
         candidates_returned.push(candidate.clone());
@@ -322,7 +320,7 @@ async fn get_next_server_candidate_mark_iterate_all_candidates() {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         assert!(list.try_mark(
-            candidate.end_point(),
+            &candidate,
             ProtocolTypes::WEB_SOCKET,
             ServerQuality::Bad
         ));
@@ -362,7 +360,7 @@ async fn get_next_server_candidate_mark_iterate_all_bad_candidates() {
 
         assert!(
             !candidates_returned.contains(&candidate),
-            "Candidate {} already seen",
+            "Candidate {:?} already seen",
             candidate.end_point()
         );
         candidates_returned.push(candidate.clone());
@@ -370,7 +368,7 @@ async fn get_next_server_candidate_mark_iterate_all_bad_candidates() {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         assert!(list.try_mark(
-            candidate.end_point(),
+            &candidate,
             ProtocolTypes::WEB_SOCKET,
             ServerQuality::Bad
         ));

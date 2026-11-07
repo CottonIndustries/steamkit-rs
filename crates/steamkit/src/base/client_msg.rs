@@ -227,9 +227,15 @@ where
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(
+            8 + prost::Message::encoded_len(&self.header.proto)
+                + self.body.encoded_len()
+                + self.payload.payload.len(),
+        );
         self.header.write(&mut out);
-        out.extend_from_slice(&self.body.encode_to_vec());
+        self.body
+            .encode(&mut out)
+            .expect("a Vec accepts encoded bytes without failing");
         out.extend_from_slice(&self.payload.payload);
         out
     }
@@ -283,9 +289,9 @@ where
         let body = TBody::read(&mut reader)?;
 
         let mut payload = MsgBase::new(0);
-        let remaining = reader.read_up_to(reader.remaining());
+        let remaining = reader.read_remaining();
         if !remaining.is_empty() {
-            payload.write_bytes(&remaining);
+            payload.write_bytes(remaining);
             payload.seek(0);
         }
 
@@ -434,9 +440,9 @@ where
         let body = TBody::read(&mut reader)?;
 
         let mut payload = MsgBase::new(0);
-        let remaining = reader.read_up_to(reader.remaining());
+        let remaining = reader.read_remaining();
         if !remaining.is_empty() {
-            payload.write_bytes(&remaining);
+            payload.write_bytes(remaining);
             payload.seek(0);
         }
 

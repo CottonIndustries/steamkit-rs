@@ -4,6 +4,7 @@ pub mod i_connection;
 pub mod net_filter_encryption_with_hmac;
 pub mod net_msg_event_args;
 pub mod protocol_type;
+pub(crate) mod proxy;
 pub mod tcp_connection;
 pub mod udp_connection;
 pub mod udp_packet;

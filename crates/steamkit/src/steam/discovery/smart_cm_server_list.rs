@@ -13,7 +13,6 @@
 //! * [`SmartCMServerList::with_provider`] doesn't use the directory at all.
 
 use std::fmt;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock as StdRwLock};
 use std::time::{Duration, SystemTime};
@@ -60,7 +59,7 @@ pub enum ServerQuality {
 }
 
 /// Loads the list of CM servers from the Steam Directory.
-pub type ServerListDirectoryLoader =
+pub(crate) type ServerListDirectoryLoader =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<ServerRecord>, SteamError>> + Send + Sync>;
 
 /// A directory loader that fetches the CM list from the Steam Directory Web API.
@@ -69,7 +68,7 @@ pub type ServerListDirectoryLoader =
 /// * `cell_id` - the cell id to send along.
 /// * `api_key` - optional Web API key.
 /// * `http_client` - the HTTP client to use; a default one is created if `None`.
-pub fn steam_directory_loader(
+pub(crate) fn steam_directory_loader(
     base_address: reqwest::Url,
     cell_id: u32,
     api_key: Option<String>,
@@ -96,7 +95,7 @@ pub fn steam_directory_loader(
 /// Like [`steam_directory_loader`], but the HTTP client is built from `factory`
 /// the first time the directory is queried, and reused after that. That way
 /// creating a configuration doesn't call the user's HTTP client factory.
-pub fn steam_directory_loader_with_factory(
+pub(crate) fn steam_directory_loader_with_factory(
     base_address: reqwest::Url,
     cell_id: u32,
     api_key: Option<String>,
@@ -234,7 +233,7 @@ impl SmartCMServerList {
     }
 
     /// Creates a list with a provider and your own Steam Directory loader.
-    pub fn with_directory_loader(
+    pub(crate) fn with_directory_loader(
         provider: Arc<dyn IServerListProvider>,
         allow_directory_fetch: bool,
         directory_loader: ServerListDirectoryLoader,
@@ -247,7 +246,7 @@ impl SmartCMServerList {
     }
 
     /// Creates a list with a provider and the Steam Directory Web API.
-    pub fn with_steam_directory(
+    pub(crate) fn with_steam_directory(
         provider: Arc<dyn IServerListProvider>,
         allow_directory_fetch: bool,
         cell_id: u32,
@@ -384,12 +383,12 @@ impl SmartCMServerList {
     /// list.
     pub fn try_mark(
         &self,
-        end_point: SocketAddr,
+        record: &ServerRecord,
         protocol_types: ProtocolTypes,
         quality: ServerQuality,
     ) -> bool {
         let now = SystemTime::now();
-        let host = end_point.ip().to_string();
+        let host = record.get_host();
 
         let mut state = self.state.write();
 
@@ -399,12 +398,13 @@ impl SmartCMServerList {
             .enumerate()
             .filter(|(_, server)| match quality {
                 ServerQuality::Good => {
-                    server.record.end_point() == end_point
+                    server.record.endpoint() == record.endpoint()
                         && server.protocol.has(protocol_types)
                 }
                 // A failure marks every endpoint of the host.
                 ServerQuality::Bad => {
-                    server.record.get_host() == host || server.record.end_point() == end_point
+                    server.record.get_host() == host
+                        || server.record.endpoint() == record.endpoint()
                 }
             })
             .map(|(index, _)| index)
@@ -425,17 +425,17 @@ impl SmartCMServerList {
     }
 
     /// Marks a server as bad; every endpoint of that host is marked at the same time.
-    pub fn mark_server_as_bad(&self, end_point: SocketAddr) -> bool {
-        self.try_mark(end_point, ProtocolTypes::ALL, ServerQuality::Bad)
+    pub fn mark_server_as_bad(&self, record: &ServerRecord) -> bool {
+        self.try_mark(record, ProtocolTypes::ALL, ServerQuality::Bad)
     }
 
     /// Marks a server as good.
     pub fn mark_server_as_good(
         &self,
-        end_point: SocketAddr,
+        record: &ServerRecord,
         protocol_types: ProtocolTypes,
     ) -> bool {
-        self.try_mark(end_point, protocol_types, ServerQuality::Good)
+        self.try_mark(record, protocol_types, ServerQuality::Good)
     }
 
     /// The next server to try that supports at least
@@ -620,8 +620,8 @@ impl SmartCMServerList {
         );
 
         let default_servers = vec![
-            ServerRecord::create_websocket_server(&Self::default_server_websocket()).await?,
-            ServerRecord::create_dns_socket_server(&Self::default_server_netfilter()).await?,
+            ServerRecord::create_web_socket_server(&Self::default_server_websocket())?,
+            ServerRecord::create_dns_socket_server(&Self::default_server_netfilter())?,
         ];
 
         self.replace_list(default_servers, false, Some(SystemTime::UNIX_EPOCH))
@@ -662,7 +662,7 @@ fn best_candidate(
 
     best.map(|(_, server)| {
         tracing::debug!(
-            "Next server candidate: {} ({:?})",
+            "Next server candidate: {:?} ({:?})",
             server.record.end_point(),
             server.protocol
         );

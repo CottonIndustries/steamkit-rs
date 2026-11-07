@@ -57,6 +57,10 @@ pub struct WebSocketReceive {
     pub message_type: WebSocketMessageType,
 }
 
+/// How often a keep-alive control frame is sent, matching the .NET
+/// `ClientWebSocket.KeepAliveInterval` default.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// A WebSocket socket.
 #[async_trait]
 pub trait WebSocketSocket: Send + Sync {
@@ -65,6 +69,13 @@ pub trait WebSocketSocket: Send + Sync {
 
     /// Receives the next chunk of a message.
     async fn receive(&self) -> Result<WebSocketReceive, SteamError>;
+
+    /// Sends a keep-alive control frame.
+    ///
+    /// The default implementation does nothing.
+    async fn keep_alive(&self) -> Result<(), SteamError> {
+        Ok(())
+    }
 
     /// Closes the socket.
     async fn close(&self) -> Result<(), SteamError>;
@@ -154,6 +165,11 @@ impl WebSocketContext {
     async fn run_loop(self: Arc<Self>, socket: Arc<dyn WebSocketSocket>) {
         self.events.emit_connected();
 
+        let mut keep_alive = tokio::time::interval_at(
+            tokio::time::Instant::now() + KEEP_ALIVE_INTERVAL,
+            KEEP_ALIVE_INTERVAL,
+        );
+
         loop {
             if self.cancel.is_cancelled() {
                 break;
@@ -162,6 +178,13 @@ impl WebSocketContext {
             let received = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => break,
+                _ = keep_alive.tick() => {
+                    if socket.keep_alive().await.is_err() {
+                        break;
+                    }
+
+                    continue;
+                }
                 result = socket.receive() => result,
             };
 
@@ -171,7 +194,7 @@ impl WebSocketContext {
 
             match received.message_type {
                 WebSocketMessageType::Binary => {
-                    let mut message = received.data;
+                    let mut message = received.data.to_vec();
 
                     while !received.end_of_message {
                         let Ok(next) = socket.receive().await else {
@@ -183,7 +206,7 @@ impl WebSocketContext {
                             break;
                         }
 
-                        message = extend(message, next.data);
+                        message.extend_from_slice(&next.data);
 
                         if next.end_of_message {
                             break;
@@ -192,7 +215,7 @@ impl WebSocketContext {
 
                     if !message.is_empty() {
                         self.events.emit_net_msg_received(NetMsgEventArgs {
-                            data: message.to_vec(),
+                            data: message,
                             end_point: self.end_point,
                         });
                     }
@@ -213,14 +236,6 @@ impl WebSocketContext {
         let _ = socket.close().await;
         self.notify_disconnected(false);
     }
-}
-
-/// Appends the payload of a message chunk to the message that is being read.
-fn extend(message: Bytes, chunk: Bytes) -> Bytes {
-    let mut buffer = Vec::with_capacity(message.len() + chunk.len());
-    buffer.extend_from_slice(&message);
-    buffer.extend_from_slice(&chunk);
-    buffer.into()
 }
 
 /// Builds the WebSocket URI for an endpoint.
@@ -282,9 +297,21 @@ impl WebSocketSocket for TungsteniteWebSocketSocket {
             return Err(SteamError::Connection("websocket is closed".to_string()));
         };
 
-        sink.send(Message::Binary(data.to_vec().into()))
+        sink.send(Message::Binary(data))
             .await
             .map_err(|err| SteamError::Connection(format!("websocket send failed: {err}")))
+    }
+
+    async fn keep_alive(&self) -> Result<(), SteamError> {
+        let mut guard = self.sink.lock().await;
+
+        let Some(sink) = guard.as_mut() else {
+            return Err(SteamError::Connection("websocket is closed".to_string()));
+        };
+
+        sink.send(Message::Pong(Bytes::new()))
+            .await
+            .map_err(|err| SteamError::Connection(format!("websocket keep-alive failed: {err}")))
     }
 
     async fn receive(&self) -> Result<WebSocketReceive, SteamError> {
@@ -396,15 +423,32 @@ impl WebSocketFactory for TungsteniteWebSocketFactory {
                 .map_err(|error| SteamError::Connection(format!("invalid websocket URI: {error}")))?,
         };
 
-        let connect = tokio_tungstenite::connect_async(request);
+        let host = request.uri().host().unwrap_or_default().to_string();
+        let port = request.uri().port_u16().unwrap_or(443);
+
+        let connect = async {
+            if let Some(proxy) = super::proxy::proxy_for(&host, port) {
+                let stream = super::proxy::connect_through(&proxy, &host, port).await?;
+
+                return tokio_tungstenite::client_async_tls_with_config(
+                    request, stream, None, None,
+                )
+                .await
+                .map_err(|error| {
+                    SteamError::Connection(format!("websocket handshake failed: {error}"))
+                });
+            }
+
+            tokio_tungstenite::connect_async(request)
+                .await
+                .map_err(|error| {
+                    SteamError::Connection(format!("websocket handshake failed: {error}"))
+                })
+        };
 
         let (socket, _response) = match tokio::time::timeout(timeout, connect).await {
             Ok(Ok(pair)) => pair,
-            Ok(Err(err)) => {
-                return Err(SteamError::Connection(format!(
-                    "websocket handshake failed: {err}"
-                )))
-            }
+            Ok(Err(error)) => return Err(error),
             Err(_) => return Err(SteamError::Timeout(timeout)),
         };
 

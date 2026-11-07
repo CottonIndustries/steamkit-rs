@@ -170,14 +170,14 @@ pub struct ChatMemberInfo {
 
 impl ChatMemberInfo {
     /// Creates an empty chat member info.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             message_object: MessageObject::new(),
         }
     }
 
     /// Creates a chat member info from an existing key value set.
-    pub(crate) fn from_key_values(key_values: KeyValue) -> Self {
+    pub fn from_key_values(key_values: KeyValue) -> Self {
         Self {
             message_object: MessageObject::with_key_values(key_values),
         }

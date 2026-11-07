@@ -589,9 +589,15 @@ async fn dispatch_message(
         return false;
     }
 
-    let mut payload = Vec::new();
-    {
+    let payload = {
         let mut state = shared.state.lock().await;
+        let capacity = state
+            .in_packets
+            .values()
+            .map(|packet| packet.payload().len())
+            .sum();
+        let mut payload = Vec::with_capacity(capacity);
+
         for _ in 0..num_packets {
             state.in_seq_handled += 1;
             let seq = state.in_seq_handled;
@@ -599,7 +605,9 @@ async fn dispatch_message(
                 payload.extend_from_slice(packet.payload());
             }
         }
-    }
+
+        payload
+    };
 
     events.emit_net_msg_received(NetMsgEventArgs {
         data: payload,

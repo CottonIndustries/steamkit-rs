@@ -20,7 +20,7 @@
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{
-    BlockCipherDecrypt, BlockCipherEncrypt, BlockModeDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit,
+    BlockCipherDecrypt, BlockCipherEncrypt, BlockModeDecrypt, BlockModeEncrypt, InnerIvInit, KeyInit,
 };
 use hmac::{Hmac, Mac};
 use rand::Rng;
@@ -39,7 +39,8 @@ const HMAC_SHA1_OUTPUT_LENGTH: usize = 20;
 #[derive(Clone)]
 pub struct NetFilterEncryptionWithHMAC {
     session_key: [u8; SESSION_KEY_LENGTH],
-    hmac_secret: [u8; HMAC_SECRET_LENGTH],
+    cipher: aes::Aes256,
+    hmac_template: HmacSha1,
 }
 
 impl std::fmt::Debug for NetFilterEncryptionWithHMAC {
@@ -69,9 +70,16 @@ impl NetFilterEncryptionWithHMAC {
         let mut secret = [0u8; HMAC_SECRET_LENGTH];
         secret.copy_from_slice(&session_key[..HMAC_SECRET_LENGTH]);
 
+        let cipher = aes::Aes256::new_from_slice(&key)
+            .map_err(|_| SteamError::InvalidArgument("invalid AES session key length".to_string()))?;
+
+        let hmac_template = <HmacSha1 as Mac>::new_from_slice(&secret)
+            .map_err(|_| SteamError::InvalidArgument("invalid HMAC key length".to_string()))?;
+
         Ok(Self {
             session_key: key,
-            hmac_secret: secret,
+            cipher,
+            hmac_template,
         })
     }
 
@@ -176,8 +184,7 @@ impl NetFilterEncryptionWithHMAC {
 
     /// The HMAC-SHA1 of `iv[13..16] || plain_text`, keyed with the HMAC secret.
     fn hmac(&self, iv: &[u8; AES_BLOCK_SIZE], plain_text: &[u8]) -> Result<HmacSha1, SteamError> {
-        let mut mac = <HmacSha1 as Mac>::new_from_slice(&self.hmac_secret)
-            .map_err(|_| SteamError::Crypto("invalid HMAC key length".to_string()))?;
+        let mut mac = self.hmac_template.clone();
         mac.update(
             &iv[NetFilterEncryptionWithHMAC::INITIALIZATION_VECTOR_LENGTH
                 - NetFilterEncryptionWithHMAC::INITIALIZATION_VECTOR_RANDOM_LENGTH..],
@@ -199,12 +206,9 @@ impl NetFilterEncryptionWithHMAC {
     }
 
     fn ecb_encrypt(&self, block: &[u8; AES_BLOCK_SIZE]) -> Result<[u8; AES_BLOCK_SIZE], SteamError> {
-        let cipher = aes::Aes256::new_from_slice(&self.session_key)
-            .map_err(|_| SteamError::Crypto("invalid AES session key length".to_string()))?;
-
         let mut buffer = aes::cipher::Block::<aes::Aes256>::default();
         buffer.copy_from_slice(block);
-        cipher.encrypt_block(&mut buffer);
+        self.cipher.encrypt_block(&mut buffer);
 
         let mut out = [0u8; AES_BLOCK_SIZE];
         out.copy_from_slice(buffer.as_slice());
@@ -212,12 +216,9 @@ impl NetFilterEncryptionWithHMAC {
     }
 
     fn ecb_decrypt(&self, block: &[u8; AES_BLOCK_SIZE]) -> Result<[u8; AES_BLOCK_SIZE], SteamError> {
-        let cipher = aes::Aes256::new_from_slice(&self.session_key)
-            .map_err(|_| SteamError::Crypto("invalid AES session key length".to_string()))?;
-
         let mut buffer = aes::cipher::Block::<aes::Aes256>::default();
         buffer.copy_from_slice(block);
-        cipher.decrypt_block(&mut buffer);
+        self.cipher.decrypt_block(&mut buffer);
 
         let mut out = [0u8; AES_BLOCK_SIZE];
         out.copy_from_slice(buffer.as_slice());
@@ -230,8 +231,9 @@ impl NetFilterEncryptionWithHMAC {
         iv: &[u8; AES_BLOCK_SIZE],
         output: &mut [u8],
     ) -> Result<usize, SteamError> {
-        let encryptor = cbc::Encryptor::<aes::Aes256>::new_from_slices(&self.session_key, iv)
-            .map_err(|_| SteamError::Crypto("invalid AES key or IV length".to_string()))?;
+        let mut iv_block = aes::cipher::Block::<aes::Aes256>::default();
+        iv_block.copy_from_slice(iv);
+        let encryptor = cbc::Encryptor::<aes::Aes256>::inner_iv_init(self.cipher.clone(), &iv_block);
 
         let cipher_text = encryptor
             .encrypt_padded_b2b::<Pkcs7>(plain_text, output)
@@ -251,16 +253,19 @@ impl NetFilterEncryptionWithHMAC {
             ));
         }
 
-        let decryptor = cbc::Decryptor::<aes::Aes256>::new_from_slices(&self.session_key, iv)
-            .map_err(|_| SteamError::Crypto("invalid AES key or IV length".to_string()))?;
+        let mut iv_block = aes::cipher::Block::<aes::Aes256>::default();
+        iv_block.copy_from_slice(iv);
+        let decryptor = cbc::Decryptor::<aes::Aes256>::inner_iv_init(self.cipher.clone(), &iv_block);
 
         let mut buffer = vec![0u8; cipher_text.len()];
-        let plain_text = decryptor
+        let plain_text_length = decryptor
             .decrypt_padded_b2b::<Pkcs7>(cipher_text, &mut buffer)
             .map_err(|_| {
                 SteamError::Crypto("Unable to decrypt incoming packet: bad padding".to_string())
-            })?;
+            })?
+            .len();
 
-        Ok(plain_text.to_vec())
+        buffer.truncate(plain_text_length);
+        Ok(buffer)
     }
 }

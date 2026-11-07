@@ -121,6 +121,21 @@ impl SteamID {
         sid
     }
 
+    /// Creates a SteamID by parsing a Steam2 identifier such as
+    /// `STEAM_0:1:1234`, in the public universe.
+    pub fn from_string(steam_id: &str) -> SteamID {
+        let mut sid = SteamID(0);
+        sid.set_from_string(steam_id, EUniverse::Public);
+        sid
+    }
+
+    /// Creates a SteamID by parsing a Steam2 identifier in the given universe.
+    pub fn from_string_with_universe(steam_id: &str, universe: EUniverse) -> SteamID {
+        let mut sid = SteamID(0);
+        sid.set_from_string(steam_id, universe);
+        sid
+    }
+
     /// Sets the parts of this SteamID.
     pub fn set(&mut self, account_id: u32, universe: EUniverse, account_type: EAccountType) {
         self.set_account_id(account_id);

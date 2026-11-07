@@ -4,14 +4,14 @@
 //! handlers and the callback queue on top.
 
 use std::any::{Any, TypeId};
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use parking_lot::RwLock;
-use tokio::sync::mpsc;
+use parking_lot::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::base::client_msg::IClientMsg;
@@ -19,7 +19,7 @@ use crate::base::generated::steam_language::EMsg;
 use crate::base::packet_base::IPacketMsg;
 use crate::error::SteamError;
 use crate::steam::authentication::steam_authentication::SteamAuthentication;
-use crate::steam::cm_client::{CMClient, ClientMsgDispatcher, ConnectionFactory};
+use crate::steam::cm_client::{CMClient, ClientMsgDispatcher};
 use crate::steam::discovery::server_record::ServerRecord;
 use crate::steam::discovery::smart_cm_server_list::SmartCMServerList;
 use crate::steam::handlers::client_msg_handler::ClientMsgHandler;
@@ -91,8 +91,8 @@ pub struct SteamClient {
     handlers: RwLock<Vec<HandlerEntry>>,
     current_job_id: AtomicU32,
     process_start_time: u32,
-    callback_queue_tx: mpsc::UnboundedSender<Box<dyn CallbackMsg>>,
-    callback_queue_rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<Box<dyn CallbackMsg>>>,
+    callback_queue: Mutex<VecDeque<Box<dyn CallbackMsg>>>,
+    callback_notify: tokio::sync::Notify,
     job_manager: AsyncJobManager,
     callback_manager: CallbackManager,
     authentication: std::sync::OnceLock<SteamAuthentication>,
@@ -149,9 +149,7 @@ impl SteamClient {
         // time we log on.
         crate::util::hardware_utils::HardwareUtils::init(configuration.machine_info_provider().clone());
 
-        let (callback_queue_tx, callback_queue_rx) = mpsc::unbounded_channel::<Box<dyn CallbackMsg>>();
-
-        let client = Arc::new_cyclic(|weak| {
+            let client = Arc::new_cyclic(|weak| {
             let dispatcher: Arc<dyn ClientMsgDispatcher> =
                 Arc::new(SteamClientDispatcher { client: weak.clone() });
             let cm = Arc::new(CMClient::new(configuration.clone(), &identifier, dispatcher));
@@ -162,8 +160,8 @@ impl SteamClient {
                 handlers: RwLock::new(Vec::new()),
                 current_job_id: AtomicU32::new(0),
                 process_start_time: capture_process_start_time(),
-                callback_queue_tx,
-                callback_queue_rx: tokio::sync::Mutex::new(callback_queue_rx),
+            callback_queue: Mutex::new(VecDeque::new()),
+            callback_notify: tokio::sync::Notify::new(),
                 job_manager: AsyncJobManager::new(),
                 callback_manager: CallbackManager::new(),
                 authentication: std::sync::OnceLock::new(),
@@ -181,7 +179,7 @@ impl SteamClient {
     }
 
     /// The configuration, shared with any other clients using it.
-    pub fn configuration_arc(&self) -> &Arc<SteamConfiguration> {
+    pub(crate) fn configuration_arc(&self) -> &Arc<SteamConfiguration> {
         self.cm.configuration()
     }
 
@@ -286,9 +284,6 @@ impl SteamClient {
     }
 
     /// Sets the factory that creates this client's connections.
-    pub fn set_connection_factory(&self, factory: ConnectionFactory) {
-        self.cm.set_connection_factory(factory);
-    }
 
     /// The underlying CM client.
     pub fn cm_client(&self) -> &Arc<CMClient> {
@@ -405,24 +400,33 @@ impl SteamClient {
 
     /// Takes the next callback off the queue, if there is one.
     pub fn get_callback(&self) -> Option<Box<dyn CallbackMsg>> {
-        let mut receiver = self.callback_queue_rx.try_lock().ok()?;
-        receiver.try_recv().ok()
+        self.callback_queue.lock().pop_front()
     }
 
     /// Waits for the next callback and takes it off the queue.
     pub async fn wait_for_callback(&self) -> Result<Box<dyn CallbackMsg>, SteamError> {
-        let mut receiver = self.callback_queue_rx.lock().await;
-        receiver.recv().await.ok_or(SteamError::Cancelled)
+        loop {
+            if let Some(callback) = self.get_callback() {
+                return Ok(callback);
+            }
+
+            let notified = self.callback_notify.notified();
+
+            if let Some(callback) = self.get_callback() {
+                return Ok(callback);
+            }
+
+            notified.await;
+        }
     }
 
     /// Waits for the next callback and takes it off the queue. `None` if the
     /// timeout runs out first.
     pub async fn wait_for_callback_timeout(&self, timeout: Duration) -> Option<Box<dyn CallbackMsg>> {
-        let mut receiver = self.callback_queue_rx.lock().await;
-        match tokio::time::timeout(timeout, receiver.recv()).await {
-            Ok(callback) => callback,
-            Err(_) => None,
-        }
+        tokio::time::timeout(timeout, self.wait_for_callback())
+            .await
+            .ok()
+            .and_then(Result::ok)
     }
 
     /// Waits for the next callback and takes it off the queue.
@@ -430,10 +434,9 @@ impl SteamClient {
         &self,
         cancellation: CancellationToken,
     ) -> Result<Box<dyn CallbackMsg>, SteamError> {
-        let mut receiver = self.callback_queue_rx.lock().await;
         tokio::select! {
             _ = cancellation.cancelled() => Err(SteamError::Cancelled),
-            callback = receiver.recv() => callback.ok_or(SteamError::Cancelled),
+            callback = self.wait_for_callback() => callback,
         }
     }
 
@@ -445,7 +448,8 @@ impl SteamClient {
         // The job manager clones what it needs, so the queue keeps the original.
         self.job_manager.try_complete_job(job_id, &*msg);
 
-        let _ = self.callback_queue_tx.send(msg);
+        self.callback_queue.lock().push_back(msg);
+        self.callback_notify.notify_one();
     }
 
     /// Posts a callback of a known type.

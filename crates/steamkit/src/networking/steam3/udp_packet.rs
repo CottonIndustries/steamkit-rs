@@ -142,6 +142,12 @@ impl UdpHeader {
     /// Serializes the header into its 36 byte little-endian wire form.
     pub fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(UdpHeader::SERIALIZED_SIZE);
+        self.serialize_into(&mut out);
+        out
+    }
+
+    /// Appends the serialized header to `out`.
+    pub fn serialize_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.magic.to_le_bytes());
         out.extend_from_slice(&self.payload_size.to_le_bytes());
         out.push(packet_type_to_u8(self.packet_type));
@@ -153,7 +159,6 @@ impl UdpHeader {
         out.extend_from_slice(&self.packets_in_msg.to_le_bytes());
         out.extend_from_slice(&self.msg_start_seq.to_le_bytes());
         out.extend_from_slice(&self.msg_size.to_le_bytes());
-        out
     }
 
     /// Deserializes the header from the front of `data`. Fails as soon as the
@@ -399,8 +404,10 @@ impl UdpPacket {
 
     /// Serializes the packet.
     pub fn get_data(&self) -> Vec<u8> {
-        let mut out = self.header.serialize();
-        out.extend_from_slice(self.payload());
+        let payload = self.payload();
+        let mut out = Vec::with_capacity(UdpHeader::SERIALIZED_SIZE + payload.len());
+        self.header.serialize_into(&mut out);
+        out.extend_from_slice(payload);
         out
     }
 }

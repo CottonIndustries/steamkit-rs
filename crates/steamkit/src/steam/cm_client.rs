@@ -6,7 +6,7 @@
 use std::fmt;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,13 +58,10 @@ const EXTENDED_HEADER_STEAM_ID_OFFSET: usize = 24;
 const EXTENDED_HEADER_SESSION_ID_OFFSET: usize = 32;
 
 /// How many CM servers to try when the server asks us to move.
-const SWITCH_ATTEMPTS: usize = 3;
 
-/// How many times in a row the client moves to another CM server without a
 /// successful logon before giving up and reporting the disconnect. Without a
 /// limit, a server that keeps closing the connection would make the client
 /// reconnect (and repeat its logon) forever.
-pub const MAX_CONSECUTIVE_SERVER_SWITCHES: u32 = 5;
 
 /// Receives the messages and lifecycle events of a [`CMClient`].
 #[async_trait]
@@ -82,18 +79,14 @@ pub trait ClientMsgDispatcher: Send + Sync {
 
 /// Creates the connection for a given protocol selection. Set it with
 /// [`CMClient::set_connection_factory`].
-pub type ConnectionFactory = Arc<
+type ConnectionFactory = Arc<
     dyn Fn(&CMClient, &ServerRecord, ProtocolTypes) -> Result<Arc<dyn Connection>, SteamError>
         + Send
         + Sync,
 >;
 
-/// The default connection factory: TCP first, then WebSocket, then UDP.
-///
-/// SteamKit2 prefers WebSocket, but Steam closes a WebSocket CM session after a
-/// minute or two while a TCP one stays up, so TCP goes first here. The
-/// WebSocket is opened with `tokio-tungstenite`, so the `CMWebSocket` HTTP
-/// client purpose from the configuration isn't used for it.
+/// The default connection factory: WebSocket first, then TCP, then UDP, the
+/// same order SteamKit2's `CreateConnection` uses.
 fn default_connection_factory(
     client: &CMClient,
     record: &ServerRecord,
@@ -102,14 +95,6 @@ fn default_connection_factory(
     let universe = client.universe();
     let debug_network_listener = client.debug_network_listener();
 
-    if protocol.has(ProtocolTypes::TCP) {
-        return Ok(Arc::new(EnvelopeEncryptedConnection::with_debug_network_listener(
-            Arc::new(TcpConnection::new()),
-            universe,
-            debug_network_listener,
-        )));
-    }
-
     if protocol.has(ProtocolTypes::WEB_SOCKET) {
         return Ok(Arc::new(
             WebSocketConnection::new_tungstenite_for_host_with_user_agent(
@@ -117,6 +102,14 @@ fn default_connection_factory(
                 default_user_agent(),
             ),
         ));
+    }
+
+    if protocol.has(ProtocolTypes::TCP) {
+        return Ok(Arc::new(EnvelopeEncryptedConnection::with_debug_network_listener(
+            Arc::new(TcpConnection::new()),
+            universe,
+            debug_network_listener,
+        )));
     }
 
     if protocol.has(ProtocolTypes::UDP) {
@@ -150,13 +143,9 @@ pub struct CMClient {
     connection_cancellation: RwLock<Option<CancellationToken>>,
     outbound: RwLock<Option<mpsc::UnboundedSender<Bytes>>>,
     expect_disconnection: AtomicBool,
-    reconnect_requested: AtomicBool,
-    /// The serialized `ClientLogon` of the current session, repeated when the
-    /// client moves to another CM server. `None` when there's no logged-on
-    /// session worth resuming.
-    pending_logon: RwLock<Option<Vec<u8>>>,
-    /// The number of server switches since the last successful logon.
-    consecutive_switches: AtomicU32,
+    /// The record of the server the client is connected to, used to mark it
+    /// good or bad. Kept because an unresolved record has no address.
+    current_record: RwLock<Option<ServerRecord>>,
     /// Bumped by every `connect`. A dispatch loop serves one generation and
     /// only touches the client's state while it's current.
     generation: AtomicU64,
@@ -214,12 +203,10 @@ impl CMClient {
             dispatcher,
             connection_factory: RwLock::new(None),
             connection: RwLock::new(None),
+            current_record: RwLock::new(None),
             connection_cancellation: RwLock::new(None),
             outbound: RwLock::new(None),
             expect_disconnection: AtomicBool::new(false),
-            reconnect_requested: AtomicBool::new(false),
-            pending_logon: RwLock::new(None),
-            consecutive_switches: AtomicU32::new(0),
             generation: AtomicU64::new(0),
             announced_generation: AtomicU64::new(0),
             is_connected: AtomicBool::new(false),
@@ -331,11 +318,6 @@ impl CMClient {
         self.expect_disconnection.store(expect, Ordering::SeqCst);
     }
 
-    /// Sets the factory that creates this client's connections.
-    pub fn set_connection_factory(&self, factory: ConnectionFactory) {
-        *self.connection_factory.write() = Some(factory);
-    }
-
     /// Writes a line to the debug log under `<client id>/<category>`, and emits
     /// a `tracing` event too.
     pub fn log_debug(&self, category: &str, message: &str) {
@@ -356,9 +338,6 @@ impl CMClient {
         self.disconnect_with(true).await;
 
         // A new session; never repeat an earlier session's logon on it.
-        *self.pending_logon.write() = None;
-        self.consecutive_switches.store(0, Ordering::SeqCst);
-        self.reconnect_requested.store(false, Ordering::SeqCst);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
         let cancellation = CancellationToken::new();
@@ -382,8 +361,26 @@ impl CMClient {
             return Err(SteamError::Connection("no server candidate is available".to_owned()));
         };
 
-        // Host names were already resolved when the server record was created.
-        let end_point = record.end_point();
+        *self.current_record.write() = Some(record.clone());
+
+        // A record created without an address is resolved here, at connect time,
+        // the way C# hands an unresolved DnsEndPoint to the connection.
+        let end_point = match record.end_point() {
+            Some(end_point) => end_point,
+            None => match crate::steam::discovery::server_record::resolve_host(
+                &record.get_host(),
+                record.get_port(),
+            )
+            .await
+            {
+                Ok(end_point) => end_point,
+                Err(error) => {
+                    self.announced_generation.fetch_max(generation, Ordering::SeqCst);
+                    self.on_client_disconnected(false).await;
+                    return Err(error);
+                }
+            },
+        };
 
         let session = match self.open_session(record, generation).await {
             Ok(session) => session,
@@ -515,19 +512,6 @@ impl CMClient {
         self.announced_generation.fetch_max(generation, Ordering::SeqCst) < generation
     }
 
-    /// Whether a session the server closed is worth resuming on another CM
-    /// server: a logon was accepted (or is still pending), and the disconnect
-    /// wasn't expected (logging off sets that expectation).
-    fn can_resume_session(&self) -> bool {
-        !self.expect_disconnection.load(Ordering::SeqCst) && self.pending_logon.read().is_some()
-    }
-
-    /// Counts a move to another CM server. Returns `false` once we've moved
-    /// [`MAX_CONSECUTIVE_SERVER_SWITCHES`] times without a successful logon.
-    fn record_switch_attempt(&self) -> bool {
-        self.consecutive_switches.fetch_add(1, Ordering::SeqCst) < MAX_CONSECUTIVE_SERVER_SWITCHES
-    }
-
     /// Ends the session of the dispatch loop serving `generation` and announces
     /// the disconnect, unless that already happened.
     ///
@@ -558,135 +542,6 @@ impl CMClient {
         self.teardown(Some(&connection), user_initiated).await;
     }
 
-    /// Moves to a different CM server after the server asked us to.
-    ///
-    /// The session isn't really over (the connection is fine, the server just
-    /// wants us elsewhere), so no disconnect is announced. This can't call
-    /// [`CMClient::connect`], since that starts a dispatch loop and the dispatch
-    /// loop is what calls this.
-    ///
-    /// Returns [`SteamError::Cancelled`] if the client was disconnected or
-    /// reconnected in the meantime.
-    async fn switch_session(
-        self: &Arc<Self>,
-        session: &mut ConnectionSession,
-        cancellation: &CancellationToken,
-        generation: u64,
-    ) -> Result<(), SteamError> {
-        self.stop_heart_beat();
-
-        // Take the old connection out of the client but DON'T disconnect it
-        // yet: its disconnect event would reach the dispatch loop (still
-        // listening on the old stream) and end the loop doing this switch.
-        let old_connection = {
-            let mut slot = self.connection.write();
-            if self.generation.load(Ordering::SeqCst) != generation {
-                return Err(SteamError::Cancelled);
-            }
-            *self.outbound.write() = None;
-            slot.take()
-        };
-
-        let mut last_error = None;
-
-        for _ in 0..SWITCH_ATTEMPTS {
-            if cancellation.is_cancelled() {
-                last_error = Some(SteamError::Cancelled);
-                break;
-            }
-
-            let mut record = self
-                .servers
-                .get_next_server_candidate_async(self.configuration.protocol_types())
-                .await;
-
-            if record.is_none() {
-                // Every server in the list is marked bad; fetch a fresh list
-                // before giving up.
-                let _ = self.servers.force_refresh_server_list().await;
-
-                record = self
-                    .servers
-                    .get_next_server_candidate_async(self.configuration.protocol_types())
-                    .await;
-            }
-
-            let Some(record) = record else {
-                break;
-            };
-
-            let end_point = record.end_point();
-            self.log_debug(
-                "CMClient",
-                &format!("Switching to another CM server: {end_point}"),
-            );
-
-            let new_session = match self.open_session(record, generation).await {
-                Ok(new_session) => new_session,
-                Err(SteamError::Cancelled) => {
-                    last_error = Some(SteamError::Cancelled);
-                    break;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                    continue;
-                }
-            };
-            let new_connection = new_session.connection.clone();
-
-            match new_connection
-                .connect(end_point, self.connection_timeout())
-                .await
-            {
-                Ok(()) if cancellation.is_cancelled() => {
-                    // We were disconnected while this connection was being made;
-                    // it mustn't survive the switch.
-                    self.release_connection(generation, &new_connection);
-                    new_connection.disconnect(true).await;
-                    last_error = Some(SteamError::Cancelled);
-                    break;
-                }
-                Ok(()) => {
-                    // Replacing the session drops the old stream, so the old
-                    // connection's disconnect never reaches the dispatch loop.
-                    *session = new_session;
-
-                    // The new server sends its own hello, and the logon is
-                    // repeated after it.
-                    self.connected_handled.store(false, Ordering::SeqCst);
-                    self.is_connected.store(false, Ordering::SeqCst);
-                    *self.session_id.write() = None;
-                    *self.steam_id.write() = None;
-
-                    if let Some(old_connection) = old_connection {
-                        old_connection.disconnect(false).await;
-                    }
-
-                    return Ok(());
-                }
-                Err(error) => {
-                    // No answer from this server; try another one so a single
-                    // unreachable server doesn't end the session.
-                    self.log_debug(
-                        "CMClient",
-                        &format!("The CM server at {end_point} did not answer: {error}"),
-                    );
-                    last_error = Some(error);
-
-                    self.release_connection(generation, &new_connection);
-                }
-            }
-        }
-
-        if let Some(old_connection) = old_connection {
-            old_connection.disconnect(false).await;
-        }
-
-        Err(last_error.unwrap_or_else(|| {
-            SteamError::Connection("no server candidate is available".to_owned())
-        }))
-    }
-
     /// Sends a client message, filling in our session id and SteamID.
     ///
     /// The message is taken by shared reference, so the session id and SteamID
@@ -702,7 +557,6 @@ impl CMClient {
 
         // Remember the logon so it can be repeated on another CM server.
         if msg.msg_type() == EMsg::ClientLogon {
-            *self.pending_logon.write() = Some(serialized.clone());
         }
 
         let outbound = self.outbound.read().clone();
@@ -801,28 +655,6 @@ impl CMClient {
         generation: u64,
     ) {
         loop {
-            if self.reconnect_requested.swap(false, Ordering::SeqCst) {
-                if !self.record_switch_attempt() {
-                    self.log_debug(
-                        "CMClient",
-                        "Not moving to another CM server: too many moves without a logon",
-                    );
-                    self.end_session(generation, &session.connection, false).await;
-                    break;
-                }
-
-                if let Err(error) = self.switch_session(&mut session, &cancellation, generation).await {
-                    self.log_debug(
-                        "CMClient",
-                        &format!("Unable to switch to another CM server: {error}"),
-                    );
-                    let user_initiated = cancellation.is_cancelled();
-                    self.end_session(generation, &session.connection, user_initiated).await;
-                    break;
-                }
-                continue;
-            }
-
             // `biased`: once we've been disconnected, nothing else still queued
             // may be acted on.
             let event = tokio::select! {
@@ -853,35 +685,9 @@ impl CMClient {
                     self.handle_connected(&session.connection).await;
                 }
                 Some(ConnectionEvent::Disconnected(args)) => {
-                    // A logged-on session the server closed is moved to another
-                    // CM server. Not one that was logged off, whose logon failed,
-                    // or that never logged on: repeating the logon there would log
-                    // the user back on against their will.
-                    let resume = !args.user_initiated && self.can_resume_session();
-                    if !resume {
-                        self.end_session(generation, &session.connection, args.user_initiated)
-                            .await;
-                        break;
-                    }
-
-                    if !self.record_switch_attempt() {
-                        self.log_debug(
-                            "CMClient",
-                            "Not reconnecting to Steam: too many reconnections without a logon",
-                        );
-                        self.end_session(generation, &session.connection, false).await;
-                        break;
-                    }
-
-                    if let Err(error) = self.switch_session(&mut session, &cancellation, generation).await {
-                        self.log_debug(
-                            "CMClient",
-                            &format!("Unable to reconnect to Steam: {error}"),
-                        );
-                        let user_initiated = cancellation.is_cancelled();
-                        self.end_session(generation, &session.connection, user_initiated).await;
-                        break;
-                    }
+                    self.end_session(generation, &session.connection, args.user_initiated)
+                        .await;
+                    break;
                 }
                 None => {
                     // The connection went away without a disconnect event.
@@ -898,23 +704,15 @@ impl CMClient {
             return;
         }
 
-        if let Some(end_point) = connection.current_end_point() {
-            self.servers.try_mark(end_point, connection.protocol_types(), ServerQuality::Good);
+        if let Some(record) = self.current_record.read().clone() {
+            self.servers.try_mark(&record, connection.protocol_types(), ServerQuality::Good);
         }
 
         self.is_connected.store(true, Ordering::SeqCst);
 
         self.on_client_connected().await;
 
-        // If the previous server sent us here ("try another CM"), repeat the
         // logon after the new server's hello.
-        let pending = self.pending_logon.read().clone();
-        if let Some(bytes) = pending {
-            let outbound = self.outbound.read().clone();
-            if let Some(outbound) = outbound {
-                let _ = outbound.send(Bytes::from(bytes));
-            }
-        }
     }
 
     /// Runs the dispatch pipeline for a received message: the base handling
@@ -1055,23 +853,22 @@ impl CMClient {
             self.restart_heart_beat(Duration::from_secs(heartbeat_seconds.max(0) as u64));
 
             // We're logged on, so the moves that got us here are done.
-            self.consecutive_switches.store(0, Ordering::SeqCst);
         } else if logon_result == EResult::TryAnotherCM || logon_result == EResult::ServiceUnavailable {
             let connection = self.connection.read().clone();
             if let Some(connection) = connection {
-                if let Some(end_point) = connection.current_end_point() {
-                    self.servers.try_mark(end_point, connection.protocol_types(), ServerQuality::Bad);
+                if connection.current_end_point().is_some() {
+                    if let Some(record) = self.current_record.read().clone() {
+                        self.servers.try_mark(&record, connection.protocol_types(), ServerQuality::Bad);
+                    }
                 }
             }
 
             // Move to another server ourselves; the connection this arrived on
             // is still perfectly healthy.
-            self.reconnect_requested.store(true, Ordering::SeqCst);
         } else {
             // The logon was refused (wrong password, expired token, Steam Guard
             // code needed). It would fail the same way on another server, and
             // retrying a wrong password is how accounts get rate limited.
-            *self.pending_logon.write() = None;
         }
     }
 
@@ -1088,7 +885,6 @@ impl CMClient {
         // The session is over; never log back on automatically. Especially not
         // after `LoggedInElsewhere`: logging back on would kick the other
         // session, which would then do the same to us.
-        *self.pending_logon.write() = None;
 
         if !packet.is_proto() {
             return;
@@ -1107,8 +903,10 @@ impl CMClient {
         if logoff_result == EResult::TryAnotherCM || logoff_result == EResult::ServiceUnavailable {
             let connection = self.connection.read().clone();
             if let Some(connection) = connection {
-                if let Some(end_point) = connection.current_end_point() {
-                    self.servers.try_mark(end_point, connection.protocol_types(), ServerQuality::Bad);
+                if connection.current_end_point().is_some() {
+                    if let Some(record) = self.current_record.read().clone() {
+                        self.servers.try_mark(&record, connection.protocol_types(), ServerQuality::Bad);
+                    }
                 }
             }
         }
@@ -1139,15 +937,16 @@ impl CMClient {
 
         if !user_initiated && !expect_disconnection {
             if let Some(connection) = connection {
-                if let Some(end_point) = connection.current_end_point() {
-                    self.servers.try_mark(end_point, connection.protocol_types(), ServerQuality::Bad);
+                if connection.current_end_point().is_some() {
+                    if let Some(record) = self.current_record.read().clone() {
+                        self.servers.try_mark(&record, connection.protocol_types(), ServerQuality::Bad);
+                    }
                 }
             }
         }
 
         if user_initiated {
             // The user disconnected, so the session is over.
-            *self.pending_logon.write() = None;
         }
 
         *self.session_id.write() = None;

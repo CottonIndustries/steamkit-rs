@@ -12,7 +12,7 @@ const BROADCAST_CAPACITY: usize = 1024;
 
 /// A message that was written to the debug log.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DebugLogMessage {
+pub(crate) struct DebugLogMessage {
     /// The category of the message.
     pub category: String,
     /// The message itself.
@@ -137,7 +137,7 @@ impl DebugLog {
 
     /// Subscribes to debug log messages. A receiver that falls behind gets
     /// `RecvError::Lagged` and misses messages.
-    pub fn subscribe() -> broadcast::Receiver<DebugLogMessage> {
+    pub(crate) fn subscribe() -> broadcast::Receiver<DebugLogMessage> {
         state().sender.subscribe()
     }
 

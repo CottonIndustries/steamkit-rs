@@ -1129,9 +1129,19 @@ impl GuestPassListCallback {
         self.result
     }
 
+    /// Sets the result of the operation.
+    pub fn set_result(&mut self, result: EResult) {
+        self.result = result;
+    }
+
     /// The number of guest passes to be given out.
     pub fn count_guest_passes_to_give(&self) -> i32 {
         self.count_guest_passes_to_give
+    }
+
+    /// Sets the number of guest passes to be given out.
+    pub fn set_count_guest_passes_to_give(&mut self, count_guest_passes_to_give: i32) {
+        self.count_guest_passes_to_give = count_guest_passes_to_give;
     }
 
     /// The number of guest passes to be redeemed.
@@ -1139,9 +1149,19 @@ impl GuestPassListCallback {
         self.count_guest_passes_to_redeem
     }
 
+    /// Sets the number of guest passes to be redeemed.
+    pub fn set_count_guest_passes_to_redeem(&mut self, count_guest_passes_to_redeem: i32) {
+        self.count_guest_passes_to_redeem = count_guest_passes_to_redeem;
+    }
+
     /// The guest pass list.
     pub fn guest_passes(&self) -> &[KeyValue] {
         &self.guest_passes
+    }
+
+    /// Sets the guest pass list.
+    pub fn set_guest_passes(&mut self, guest_passes: Vec<KeyValue>) {
+        self.guest_passes = guest_passes;
     }
 }
 
@@ -1192,14 +1212,29 @@ impl RedeemGuestPassResponseCallback {
         self.result
     }
 
+    /// Sets the result of the operation.
+    pub fn set_result(&mut self, result: EResult) {
+        self.result = result;
+    }
+
     /// The package id which was activated.
     pub fn package_id(&self) -> u32 {
         self.package_id
     }
 
+    /// Sets the package id which was activated.
+    pub fn set_package_id(&mut self, package_id: u32) {
+        self.package_id = package_id;
+    }
+
     /// The app id which must be owned to activate this guest pass.
     pub fn must_own_app_id(&self) -> u32 {
         self.must_own_app_id
+    }
+
+    /// Sets the app id which must be owned to activate this guest pass.
+    pub fn set_must_own_app_id(&mut self, must_own_app_id: u32) {
+        self.must_own_app_id = must_own_app_id;
     }
 }
 
@@ -1259,14 +1294,29 @@ impl PurchaseResponseCallback {
         self.result
     }
 
+    /// Sets the result of the operation.
+    pub fn set_result(&mut self, result: EResult) {
+        self.result = result;
+    }
+
     /// The purchase result of the operation.
     pub fn purchase_result_detail(&self) -> EPurchaseResultDetail {
         self.purchase_result_detail
     }
 
+    /// Sets the purchase result of the operation.
+    pub fn set_purchase_result_detail(&mut self, purchase_result_detail: EPurchaseResultDetail) {
+        self.purchase_result_detail = purchase_result_detail;
+    }
+
     /// The purchase receipt of the operation.
     pub fn purchase_receipt_info(&self) -> &KeyValue {
         &self.purchase_receipt_info
+    }
+
+    /// Sets the purchase receipt of the operation.
+    pub fn set_purchase_receipt_info(&mut self, purchase_receipt_info: KeyValue) {
+        self.purchase_receipt_info = purchase_receipt_info;
     }
 }
 
@@ -1332,6 +1382,11 @@ impl CheckAppBetaPasswordCallback {
         self.result
     }
 
+    /// Sets the result of the operation.
+    pub fn set_result(&mut self, result: EResult) {
+        self.result = result;
+    }
+
     /// The map of beta names to their encryption keys.
     pub fn beta_passwords(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.beta_passwords
@@ -1393,6 +1448,11 @@ impl PrivateBetaCallback {
     /// The result of the operation.
     pub fn result(&self) -> EResult {
         self.result
+    }
+
+    /// Sets the result of the operation.
+    pub fn set_result(&mut self, result: EResult) {
+        self.result = result;
     }
 
     /// The key value info to be merged into the main appinfo.

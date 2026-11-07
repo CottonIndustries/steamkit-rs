@@ -52,5 +52,5 @@ async fn reads_updated_server_list() {
         "clearing the list should succeed: {cleared:?}"
     );
 
-    let _ = std::fs::remove_file(provider.filename());
+    let _ = std::fs::remove_file(std::env::temp_dir().join("steamkit").join("serverlist.protobuf"));
 }

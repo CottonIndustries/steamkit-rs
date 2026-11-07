@@ -20,18 +20,18 @@ use super::basic_server_list_proto::{
 use super::server_record::ServerRecord;
 
 /// The server list as stored by the file and isolated-storage providers.
-pub(crate) struct BasicServerList {
+pub struct BasicServerList {
     servers: Vec<BasicServerListProto>,
 }
 
 impl BasicServerList {
     /// The servers in the list.
-    pub(crate) fn servers(&self) -> &[BasicServerListProto] {
+    pub fn servers(&self) -> &[BasicServerListProto] {
         &self.servers
     }
 
     /// Builds the list from server records.
-    pub(crate) fn from_server_records(endpoints: &[ServerRecord]) -> Self {
+    pub fn from_server_records(endpoints: &[ServerRecord]) -> Self {
         BasicServerList {
             servers: endpoints
                 .iter()
@@ -41,7 +41,7 @@ impl BasicServerList {
     }
 
     /// Encodes the list as repeated message field 1.
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
 
         for item in &self.servers {
@@ -55,7 +55,7 @@ impl BasicServerList {
     }
 
     /// Decodes a list written as repeated message field 1.
-    pub(crate) fn decode(data: &[u8]) -> Result<Self, SteamError> {
+    pub fn decode(data: &[u8]) -> Result<Self, SteamError> {
         let mut servers = Vec::new();
         let mut cursor = Cursor::new(data);
 

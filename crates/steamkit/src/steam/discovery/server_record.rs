@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 use crate::error::SteamError;
 use crate::networking::steam3::protocol_type::ProtocolTypes;
@@ -27,8 +27,8 @@ pub enum EndPoint {
         host: String,
         /// The port of the endpoint.
         port: u16,
-        /// The address the host name resolved to.
-        address: SocketAddr,
+        /// The address the host name resolved to, or `None` until it is resolved.
+        address: Option<SocketAddr>,
     },
 }
 
@@ -39,14 +39,23 @@ impl EndPoint {
         EndPoint::Dns {
             host: host.into(),
             port,
-            address,
+            address: Some(address),
+        }
+    }
+
+    /// Creates a host name endpoint that has not been resolved yet.
+    pub fn unresolved_dns(host: impl Into<String>, port: u16) -> Self {
+        EndPoint::Dns {
+            host: host.into(),
+            port,
+            address: None,
         }
     }
 
     /// The socket address of the endpoint.
-    pub fn socket_addr(&self) -> SocketAddr {
+    pub fn socket_addr(&self) -> Option<SocketAddr> {
         match self {
-            EndPoint::Ip(address) => *address,
+            EndPoint::Ip(address) => Some(*address),
             EndPoint::Dns { address, .. } => *address,
         }
     }
@@ -142,7 +151,7 @@ impl ServerRecord {
 
     /// The address to connect to. For the host name, if there is one, use
     /// [`ServerRecord::endpoint`].
-    pub fn end_point(&self) -> SocketAddr {
+    pub fn end_point(&self) -> Option<SocketAddr> {
         self.end_point.socket_addr()
     }
 
@@ -152,7 +161,7 @@ impl ServerRecord {
     }
 
     /// Whether the endpoint is a host name rather than an IP address.
-    pub fn is_dns(&self) -> bool {
+    pub(crate) fn is_dns(&self) -> bool {
         matches!(self.end_point, EndPoint::Dns { .. })
     }
 
@@ -171,26 +180,10 @@ impl ServerRecord {
         self.end_point.port()
     }
 
-    /// Creates a record for the given host and port. A host name is resolved
-    /// to an address.
-    pub async fn create_server(
-        host: &str,
-        port: u16,
-        protocol_types: ProtocolTypes,
-    ) -> Result<Self, SteamError> {
-        match host.parse::<IpAddr>() {
-            Ok(address) => Ok(ServerRecord::new(
-                EndPoint::Ip(SocketAddr::new(address, port)),
-                protocol_types,
-            )),
-            Err(_) => {
-                let address = resolve_host(host, port).await?;
-                Ok(ServerRecord::new(
-                    EndPoint::dns(host, port, address),
-                    protocol_types,
-                ))
-            }
-        }
+    /// Creates a record for the given host and port. The host name stays
+    /// unresolved until the client connects.
+    pub fn create_server(host: &str, port: u16, protocol_types: ProtocolTypes) -> Self {
+        ServerRecord::new(EndPoint::unresolved_dns(host, port), protocol_types)
     }
 
     /// Creates a TCP/UDP server record for an IP endpoint.
@@ -214,24 +207,24 @@ impl ServerRecord {
 
     /// Creates a TCP/UDP server record from a "host:port" address. The port
     /// defaults to 443.
-    pub async fn create_dns_socket_server(address: &str) -> Result<Self, SteamError> {
-        ServerRecord::create_server_from_dns(address, tcp_udp_protocol_types()).await
+    pub fn create_dns_socket_server(address: &str) -> Result<Self, SteamError> {
+        ServerRecord::create_server_from_address(address, tcp_udp_protocol_types())
     }
 
     /// Creates a WebSocket server record from a "host:port" address. The port
     /// defaults to 443.
-    pub async fn create_websocket_server(address: &str) -> Result<Self, SteamError> {
-        ServerRecord::create_server_from_dns(address, ProtocolTypes::WEB_SOCKET).await
+    pub fn create_web_socket_server(address: &str) -> Result<Self, SteamError> {
+        ServerRecord::create_server_from_address(address, ProtocolTypes::WEB_SOCKET)
     }
 
-    /// Creates a server record from a "host:port" address.
-    async fn create_server_from_dns(
+    /// Creates a server record from a "host:port" address without resolving it.
+    fn create_server_from_address(
         address: &str,
         protocol_types: ProtocolTypes,
     ) -> Result<Self, SteamError> {
         const DEFAULT_PORT: u16 = 443;
 
-        let (host, port) = match address.find(':') {
+        let (host, port) = match address.rfind(':') {
             Some(index) => {
                 let host = &address[..index];
                 let port = &address[index + 1..];
@@ -245,10 +238,14 @@ impl ServerRecord {
             None => (address, DEFAULT_PORT),
         };
 
-        let resolved = resolve_host(host, port).await?;
+        if host.is_empty() {
+            return Err(SteamError::InvalidArgument(
+                "Host name must not be empty.".to_string(),
+            ));
+        }
 
         Ok(ServerRecord::new(
-            EndPoint::dns(host, port, resolved),
+            EndPoint::unresolved_dns(host, port),
             protocol_types,
         ))
     }
@@ -277,7 +274,7 @@ impl fmt::Display for ServerRecord {
 }
 
 /// Resolves a host name to a socket address.
-async fn resolve_host(host: &str, port: u16) -> Result<SocketAddr, SteamError> {
+pub(crate) async fn resolve_host(host: &str, port: u16) -> Result<SocketAddr, SteamError> {
     let mut addresses = tokio::net::lookup_host((host, port))
         .await
         .map_err(|error| SteamError::Connection(format!("Failed to resolve {host}: {error}")))?;

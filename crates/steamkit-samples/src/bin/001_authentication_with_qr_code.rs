@@ -30,9 +30,8 @@ fn draw_qr_code(challenge_url: &str) {
     println!("Use the Steam Mobile App to sign in via QR code:");
     println!("{}", code.to_ascii_art());
 
-    // The art above is drawn with block characters, which a Windows console
-    // renders as "?" because of the OEM code page. The SVG is the reliable way
-    // to scan it: open it in a browser and scan it off the screen.
+    // The art above needs a console font that has the block-drawing glyphs.
+    // The SVG works regardless of the font, so it is always written.
     let path = std::env::temp_dir().join("steamkit-qr-login.svg");
     if std::fs::write(&path, code.to_svg()).is_ok() {
         println!("Or open this in a browser and scan it from there:");

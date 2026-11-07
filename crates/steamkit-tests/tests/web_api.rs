@@ -14,7 +14,8 @@ use steamkit::error::SteamError;
 use steamkit::steam::steam_client::configuration::i_steam_configuration_builder::ISteamConfigurationBuilder;
 use steamkit::steam::steam_client::configuration::steam_configuration::SteamConfiguration;
 use steamkit::steam::webapi::steam_configuration_web_api_extensions::get_async_web_api_interface;
-use steamkit::steam::webapi::web_api::{web_api_args, AsyncInterface, WebAPI, WebApiValue};
+use steamkit::steam::webapi::web_api::{web_api_args, AsyncInterface, WebApiValue};
+use steamkit_protos::steam::CMsgClientHello;
 
 /// Parses a value from its textual form.
 ///
@@ -42,14 +43,17 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Splits a query string into its key value pairs.
+///
+/// The names and values are percent decoded, like `HttpUtility.ParseQueryString`
+/// does in SteamKit2's tests.
 fn parse_query(query: &str) -> Vec<(String, String)> {
-    query
-        .split('&')
-        .filter(|part| !part.is_empty())
-        .map(|part| match part.split_once('=') {
-            Some((name, value)) => (name.to_string(), value.to_string()),
-            None => (part.to_string(), String::new()),
-        })
+    let url = match reqwest::Url::parse(&format!("http://localhost/?{query}")) {
+        Ok(url) => url,
+        Err(error) => panic!("{query} is not a valid query string: {error}"),
+    };
+
+    url.query_pairs()
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
         .collect()
 }
 
@@ -133,6 +137,11 @@ impl FakeWebApi {
             Some(request) => request,
             None => panic!("the fake Web API server must record the request"),
         }
+    }
+
+    /// Returns the next request the server received, if one arrived already.
+    fn try_next_request(&mut self) -> Option<CapturedRequest> {
+        self.requests.try_recv().ok()
     }
 }
 
@@ -218,41 +227,32 @@ fn interface_for(server: &FakeWebApi) -> AsyncInterface {
     get_async_web_api_interface(&config, "IFooService")
 }
 
-#[test]
-fn web_api_has_default_timeout() {
-    let iface = WebAPI::get_interface_with_base_address(
-        parse("https://whatever/"),
-        "ISteamWhatever",
-        "",
-    );
 
-    assert_eq!(std::time::Duration::from_secs(100), iface.timeout());
-}
 
-#[test]
-fn web_api_async_has_default_timeout() {
-    let iface = WebAPI::get_async_interface_with_base_address(
-        parse("https://whatever/"),
-        "ISteamWhatever",
-        "",
-    );
+#[tokio::test]
+async fn steam_config_web_api_interface() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
 
-    assert_eq!(std::time::Duration::from_secs(100), iface.timeout());
-}
-
-#[test]
-fn steam_config_web_api_interface() {
     let config = SteamConfiguration::create(|builder| {
         builder
-            .with_web_api_base_address(parse("http://example.com"))
+            .with_web_api_base_address(parse(&server.base_address()))
             .with_web_api_key("hello world".to_string());
     });
 
     let iface = get_async_web_api_interface(&config, "TestInterface");
+    iface
+        .call("PerformFooOperation", 1, &[])
+        .await
+        .expect("the request must succeed");
 
-    assert_eq!("TestInterface", iface.iface());
-    assert_eq!("hello world", iface.api_key());
-    assert_eq!("http://example.com/", iface.base_address().to_string());
+    let request = server.next_request().await;
+
+    assert!(request.path.starts_with("/TestInterface/PerformFooOperation/v1/"));
+    assert!(
+        request.query.contains("key=hello%20world"),
+        "the configured API key must be sent, got: {}",
+        request.query
+    );
 }
 
 #[tokio::test]
@@ -261,11 +261,11 @@ async fn throws_web_api_request_exception_if_request_unsuccessful() {
     let iface = interface_for(&server);
 
     // A failed request comes back as an error.
-    match iface.call("PerformFooOperation", 1, &[]).await {
-        Ok(_) => panic!("the request must not succeed"),
-        Err(SteamError::Connection(_)) => {}
-        Err(error) => panic!("the request must fail with a connection error, got: {error}"),
-    }
+        match iface.call("PerformFooOperation", 1, &[]).await {
+            Ok(_) => panic!("the request must not succeed"),
+            Err(SteamError::WebApi { status: 503, .. }) => {}
+            Err(error) => panic!("the request must fail with a Web API error, got: {error}"),
+        }
 
     let _ = server.next_request().await;
 }
@@ -461,4 +461,147 @@ async fn includes_api_key_in_params() {
     assert_eq!(Some("foo"), lookup(&values, "f"));
     assert_eq!(Some("bar"), lookup(&values, "b"));
     assert_eq!(Some("vdf"), lookup(&values, "format"));
+}
+
+#[tokio::test]
+async fn flattens_list_args_into_indexed_params() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([
+        (
+            "ids",
+            WebApiValue::List(vec!["10".into(), "20".into()]),
+        ),
+        ("f", "foo".into()),
+    ]);
+
+    if let Err(error) = iface.call("PerformFooOperation", 1, &args).await {
+        panic!("the call must succeed, got: {error}");
+    }
+
+    let request = server.next_request().await;
+    let values = parse_query(&request.query);
+
+    assert_eq!(4usize, values.len());
+    assert_eq!(Some("10"), lookup(&values, "ids[0]"));
+    assert_eq!(Some("20"), lookup(&values, "ids[1]"));
+    assert_eq!(Some("foo"), lookup(&values, "f"));
+    assert_eq!(Some("vdf"), lookup(&values, "format"));
+}
+
+#[tokio::test]
+async fn uses_api_key_from_args() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([
+        ("key", "MySecretApiKey".into()),
+        ("f", "foo".into()),
+        ("b", "bar".into()),
+    ]);
+
+    if let Err(error) = iface.call("PerformFooOperation", 2, &args).await {
+        panic!("the call must succeed, got: {error}");
+    }
+
+    let request = server.next_request().await;
+
+    assert_eq!("GET", request.method);
+    assert_eq!("/IFooService/PerformFooOperation/v2/", request.path);
+
+    let values = parse_query(&request.query);
+
+    assert_eq!(4usize, values.len());
+    assert_eq!(Some("MySecretApiKey"), lookup(&values, "key"));
+    assert_eq!(Some("foo"), lookup(&values, "f"));
+    assert_eq!(Some("bar"), lookup(&values, "b"));
+    assert_eq!(Some("vdf"), lookup(&values, "format"));
+}
+
+#[tokio::test]
+async fn formats_protobuf_requests() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([("format", "protobuf_raw".into())]);
+
+    // 'protobuf_raw' is the accepted value, so this must not throw.
+    if let Err(error) = iface
+        .call_protobuf::<CMsgClientHello>(parse("GET"), "PerformFooOperation", 2, &args)
+        .await
+    {
+        panic!("the call must succeed, got: {error}");
+    }
+
+    let request = server.next_request().await;
+    let values = parse_query(&request.query);
+
+    assert_eq!(Some("protobuf_raw"), lookup(&values, "format"));
+}
+
+#[tokio::test]
+async fn rejects_vdf_format_when_calling_protobuf() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([("format", "vdf".into())]);
+
+    match iface
+        .call_protobuf::<CMsgClientHello>(parse("GET"), "PerformFooOperation", 2, &args)
+        .await
+    {
+        Ok(_) => panic!("the call must not succeed"),
+        Err(SteamError::InvalidArgument(_)) => {}
+        Err(error) => panic!("the call must fail with an invalid argument, got: {error}"),
+    }
+
+    assert!(server.try_next_request().is_none());
+}
+
+#[tokio::test]
+async fn rejects_protobuf_format_when_calling_vdf() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([("format", "protobuf_raw".into())]);
+
+    match iface.call("PerformFooOperation", 2, &args).await {
+        Ok(_) => panic!("the call must not succeed"),
+        Err(SteamError::InvalidArgument(_)) => {}
+        Err(error) => panic!("the call must fail with an invalid argument, got: {error}"),
+    }
+
+    assert!(server.try_next_request().is_none());
+}
+
+#[tokio::test]
+async fn does_not_produce_empty_query_parameter() {
+    for api_key in ["", "MySecretApiKey"] {
+        let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+
+        let config = SteamConfiguration::create(|builder| {
+            builder
+                .with_web_api_base_address(parse(&server.base_address()))
+                .with_web_api_key(api_key.to_string());
+        });
+
+        let iface = get_async_web_api_interface(&config, "IFooService");
+
+        let args = web_api_args([("format", "vdf".into()), ("f", "foo".into())]);
+
+        if let Err(error) = iface.call("PerformFooOperation", 2, &args).await {
+            panic!("the call must succeed, got: {error}");
+        }
+
+        let request = server.next_request().await;
+        let query = format!("?{}", request.query);
+
+        assert!(!query.contains("?&"), "the query must not hold an empty parameter, got: {query}");
+        assert!(!query.contains("&&"), "the query must not hold an empty parameter, got: {query}");
+
+        let values = parse_query(&request.query);
+
+        assert_eq!(Some("foo"), lookup(&values, "f"));
+    }
 }

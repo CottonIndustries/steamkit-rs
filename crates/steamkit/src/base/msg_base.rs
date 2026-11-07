@@ -72,6 +72,13 @@ impl<'a> Reader<'a> {
         self.data[start..end].to_vec()
     }
 
+    /// Borrows the rest of the slice and advances the cursor to the end.
+    pub(crate) fn read_remaining(&mut self) -> &'a [u8] {
+        let start = self.position.min(self.data.len());
+        self.position = self.data.len();
+        &self.data[start..]
+    }
+
     /// Reads a single unsigned byte.
     pub fn read_u8(&mut self) -> Result<u8, SteamError> {
         Ok(self.read_bytes(1)?[0])

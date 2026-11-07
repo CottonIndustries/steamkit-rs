@@ -30,13 +30,13 @@ pub use crate::types::job_id::{
 };
 
 /// How long a job waits for its response by default.
-pub const DEFAULT_JOB_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_JOB_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How much a heartbeat from Steam extends a job's timeout.
-pub const JOB_HEARTBEAT_EXTENSION: Duration = Duration::from_secs(10);
+pub(crate) const JOB_HEARTBEAT_EXTENSION: Duration = Duration::from_secs(10);
 
 /// How often the manager checks for timed out jobs.
-pub const JOB_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const JOB_TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The awaiting side of a multi-result job.
 pub type MultiJobHandle<T> = AsyncJobMultiple<T>;
@@ -215,7 +215,7 @@ impl AsyncJobManager {
     }
 
     /// The number of jobs that are currently tracked.
-    pub fn tracked_job_count(&self) -> usize {
+    pub(crate) fn tracked_job_count(&self) -> usize {
         self.inner.jobs.len()
     }
 
@@ -412,7 +412,7 @@ impl AsyncJobManager {
     }
 
     /// Whether the periodic timeout check is running.
-    pub fn timeouts_enabled(&self) -> bool {
+    pub(crate) fn timeouts_enabled(&self) -> bool {
         self.timeouts_enabled.load(Ordering::SeqCst)
     }
 

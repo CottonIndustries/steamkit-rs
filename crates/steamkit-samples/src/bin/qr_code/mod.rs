@@ -188,9 +188,9 @@ impl QrCode {
 
     /// Renders the code as an SVG document.
     ///
-    /// The terminal art uses block characters, which a Windows console shows
-    /// as `?` because of the OEM code page, so it can't be scanned there. The
-    /// SVG can be opened in a browser and scanned off the screen.
+    /// The terminal art uses block characters, which need a console font that
+    /// has those glyphs. The SVG does not depend on the font and can be opened
+    /// in a browser and scanned off the screen.
     pub fn to_svg(&self) -> String {
         const MODULE: usize = 8;
         const QUIET: usize = 4;

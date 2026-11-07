@@ -35,7 +35,7 @@ impl IsolatedStorageServerListProvider {
     }
 
     /// The path of the cache file.
-    pub fn filename(&self) -> &std::path::Path {
+    pub(crate) fn filename(&self) -> &std::path::Path {
         &self.filename
     }
 

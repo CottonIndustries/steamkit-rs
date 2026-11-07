@@ -26,7 +26,7 @@ impl FileStorageServerListProvider {
     }
 
     /// The path of the cache file.
-    pub fn filename(&self) -> &Path {
+    pub(crate) fn filename(&self) -> &Path {
         &self.filename
     }
 

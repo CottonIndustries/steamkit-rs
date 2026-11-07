@@ -17,6 +17,15 @@ pub enum SteamError {
     #[error("connection error: {0}")]
     Connection(String),
 
+    /// The Web API answered with an unsuccessful HTTP status.
+    #[error("web api error: HTTP {status}: {reason}")]
+    WebApi {
+        /// The HTTP status code of the response.
+        status: u16,
+        /// The reason phrase of the response.
+        reason: String,
+    },
+
     /// The remote end closed the connection.
     #[error("connection closed by peer")]
     ConnectionClosed,

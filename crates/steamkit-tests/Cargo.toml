@@ -32,3 +32,7 @@ flate2 = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[[bench]]
+name = "hot_paths"
+harness = false

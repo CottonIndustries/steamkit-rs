@@ -22,7 +22,7 @@ use super::server_record::{tcp_udp_protocol_types, ServerRecord};
 
 /// One cached server list entry.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct BasicServerListProto {
+pub struct BasicServerListProto {
     /// The address of the server (an IP address or a DNS host name).
     pub(crate) address: String,
     /// The port of the server.
@@ -33,7 +33,7 @@ pub(crate) struct BasicServerListProto {
 
 impl BasicServerListProto {
     /// Creates a payload for the given address, port and protocol types.
-    pub(crate) fn new(address: String, port: u16, protocols: ProtocolTypes) -> Self {
+    pub fn new(address: String, port: u16, protocols: ProtocolTypes) -> Self {
         BasicServerListProto {
             address,
             port,
@@ -42,23 +42,23 @@ impl BasicServerListProto {
     }
 
     /// The address of the server.
-    pub(crate) fn address(&self) -> &str {
+    pub fn address(&self) -> &str {
         &self.address
     }
 
     /// The port of the server.
-    pub(crate) fn port(&self) -> u16 {
+    pub fn port(&self) -> u16 {
         self.port
     }
 
     /// The protocol types the server supports; `Tcp | Udp` if the value was
     /// missing.
-    pub(crate) fn protocols(&self) -> ProtocolTypes {
+    pub fn protocols(&self) -> ProtocolTypes {
         self.protocols.unwrap_or_else(tcp_udp_protocol_types)
     }
 
     /// Creates a payload from a server record.
-    pub(crate) fn from_server_record(record: &ServerRecord) -> Self {
+    pub fn from_server_record(record: &ServerRecord) -> Self {
         BasicServerListProto {
             address: record.get_host(),
             port: record.get_port(),
@@ -68,11 +68,15 @@ impl BasicServerListProto {
 
     /// Converts back to a server record, resolving a DNS address.
     pub(crate) async fn to_server_record(&self) -> Result<ServerRecord, SteamError> {
-        ServerRecord::create_server(&self.address, self.port, self.protocols()).await
+        Ok(ServerRecord::create_server(
+            &self.address,
+            self.port,
+            self.protocols(),
+        ))
     }
 
     /// Encodes the entry as a protobuf message.
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
 
         if !self.address.is_empty() {
@@ -97,7 +101,7 @@ impl BasicServerListProto {
     }
 
     /// Decodes an entry from a protobuf message.
-    pub(crate) fn decode(data: &[u8]) -> Result<Self, SteamError> {
+    pub fn decode(data: &[u8]) -> Result<Self, SteamError> {
         let mut result = BasicServerListProto::default();
         let mut cursor = Cursor::new(data);
 

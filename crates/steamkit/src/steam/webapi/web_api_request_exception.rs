@@ -45,7 +45,9 @@ impl From<WebAPIRequestException> for SteamError {
         let message = value.to_string();
 
         match value {
-            WebAPIRequestException::Status { .. } => SteamError::Connection(message),
+            WebAPIRequestException::Status { status, reason } => {
+                SteamError::WebApi { status, reason }
+            }
             WebAPIRequestException::Other { .. } => SteamError::Other(message),
         }
     }

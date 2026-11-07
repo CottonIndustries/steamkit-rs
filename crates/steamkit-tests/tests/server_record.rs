@@ -49,11 +49,11 @@ fn hash_of(record: &ServerRecord) -> u64 {
 fn null_is_not_equal() {
     let record = create_websocket_server();
 
-    assert!(record.is_dns(), "the record should be a DNS endpoint");
+    assert!(matches!(record.endpoint(), EndPoint::Dns { .. }), "the record should be a DNS endpoint");
     assert_eq!("host", record.get_host());
     assert_eq!(1, record.get_port());
     assert_eq!(ProtocolTypes::WEB_SOCKET, record.protocol_types());
-    assert_eq!(host_address(), record.end_point());
+    assert_eq!(Some(host_address()), record.end_point());
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn can_try_create_socket_server() {
     let record = record.expect("127.0.0.1:1234 should parse");
     assert_eq!(
         SocketAddr::from(([127, 0, 0, 1], 1234)),
-        record.end_point(),
+        record.end_point().expect("the record is resolved"),
         "the endpoint should be the loopback address on port 1234"
     );
     assert_eq!(
@@ -132,7 +132,7 @@ fn can_try_create_socket_server() {
     let record = record.expect("192.168.0.1:5678 should parse");
     assert_eq!(
         SocketAddr::from(([192, 168, 0, 1], 5678)),
-        record.end_point(),
+        record.end_point().expect("the record is resolved"),
         "the endpoint should be 192.168.0.1 on port 5678"
     );
     assert_eq!(
@@ -157,4 +157,42 @@ fn cannot_try_create_socket_server() {
 
     // a DNS name rather than an IP address
     assert!(ServerRecord::try_create_socket_server("volvopls.valvesoftware.com:1234").is_none());
+}
+
+#[test]
+fn create_dns_socket_server_leaves_the_host_unresolved() {
+    let record = ServerRecord::create_dns_socket_server("example.com:27017")
+        .expect("the address is valid");
+
+    assert_eq!("example.com", record.get_host());
+    assert_eq!(27017, record.get_port());
+    assert!(
+        record.end_point().is_none(),
+        "the record must not be resolved"
+    );
+    assert!(matches!(record.endpoint(), EndPoint::Dns { .. }));
+    assert_eq!(
+        ProtocolTypes::TCP | ProtocolTypes::UDP,
+        record.protocol_types()
+    );
+}
+
+#[test]
+fn create_dns_socket_server_defaults_the_port_to_443() {
+    let record = ServerRecord::create_dns_socket_server("example.com").expect("the address is valid");
+
+    assert_eq!(443, record.get_port());
+}
+
+#[test]
+fn create_web_socket_server_uses_the_web_socket_protocol() {
+    let record = ServerRecord::create_web_socket_server("example.com:443").expect("the address is valid");
+
+    assert_eq!(ProtocolTypes::WEB_SOCKET, record.protocol_types());
+    assert!(record.end_point().is_none());
+}
+
+#[test]
+fn create_dns_socket_server_rejects_an_invalid_port() {
+    assert!(ServerRecord::create_dns_socket_server("example.com:not-a-port").is_err());
 }

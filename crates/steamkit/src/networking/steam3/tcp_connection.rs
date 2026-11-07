@@ -168,12 +168,20 @@ impl IConnection for TcpConnection {
             return Ok(());
         };
 
-        let mut framed = Vec::with_capacity(8 + data.len());
-        framed.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        framed.extend_from_slice(&MAGIC.to_le_bytes());
-        framed.extend_from_slice(&data);
+        let mut header = [0u8; 8];
+        header[..4].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        header[4..].copy_from_slice(&MAGIC.to_le_bytes());
 
-        writer.write_all(&framed).await?;
+        let buffers = [std::io::IoSlice::new(&header), std::io::IoSlice::new(&data)];
+        let written = writer.write_vectored(&buffers).await?;
+
+        if written < header.len() {
+            writer.write_all(&header[written..]).await?;
+            writer.write_all(&data).await?;
+        } else if written < header.len() + data.len() {
+            writer.write_all(&data[written - header.len()..]).await?;
+        }
+
         writer.flush().await?;
 
         Ok(())
