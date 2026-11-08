@@ -306,29 +306,9 @@ impl SteamClient {
             .get_or_init(|| SteamAuthentication::new(self.weak.clone()))
     }
 
-    /// Adds a message handler. Adding the same handler twice keeps the first.
-    ///
-    /// A handler added this way can't be fetched with
-    /// [`SteamClient::get_handler`], since its type isn't known here; use
-    /// [`SteamClient::add_typed_handler`] for that.
-    pub fn add_handler(&self, handler: Arc<dyn ClientMsgHandler>) {
-        let mut handlers = self.handlers.write();
-
-        if handlers.iter().any(|entry| Arc::ptr_eq(&entry.handler, &handler)) {
-            tracing::warn!("the handler is already registered");
-            return;
-        }
-
-        handlers.push(HandlerEntry {
-            type_id: None,
-            handler,
-            any: None,
-        });
-    }
-
     /// Adds a message handler that can be fetched with
     /// [`SteamClient::get_handler`] later.
-    pub fn add_typed_handler<T>(&self, handler: T) -> Result<(), SteamError>
+    pub fn add_handler<T>(&self, handler: T) -> Result<(), SteamError>
     where
         T: ClientMsgHandler + 'static,
     {
@@ -630,21 +610,21 @@ impl SteamClient {
 /// Adds the built-in handlers. SteamFriends has to come before SteamUser
 /// because of `AccountInfoCallback`.
 fn add_default_handlers(client: &Arc<SteamClient>) {
-    let _ = client.add_typed_handler(SteamFriends::new(client));
-    let _ = client.add_typed_handler(SteamUser::new(client));
-    let _ = client.add_typed_handler(SteamApps::new(client));
-    let _ = client.add_typed_handler(SteamGameCoordinator::new(client));
-    let _ = client.add_typed_handler(SteamGameServer::new(client));
-    let _ = client.add_typed_handler(SteamUserStats::new(client));
-    let _ = client.add_typed_handler(SteamMasterServer::new(client));
-    let _ = client.add_typed_handler(SteamCloud::new(client));
-    let _ = client.add_typed_handler(SteamWorkshop::new(client));
-    let _ = client.add_typed_handler(SteamUnifiedMessages::new(client));
-    let _ = client.add_typed_handler(SteamScreenshots::new(client));
-    let _ = client.add_typed_handler(SteamMatchmaking::new(client));
-    let _ = client.add_typed_handler(SteamNetworking::new(client));
-    let _ = client.add_typed_handler(SteamContent::new(client));
-    let _ = client.add_typed_handler(SteamAuthTicket::new(client));
+    let _ = client.add_handler(SteamFriends::new(client));
+    let _ = client.add_handler(SteamUser::new(client));
+    let _ = client.add_handler(SteamApps::new(client));
+    let _ = client.add_handler(SteamGameCoordinator::new(client));
+    let _ = client.add_handler(SteamGameServer::new(client));
+    let _ = client.add_handler(SteamUserStats::new(client));
+    let _ = client.add_handler(SteamMasterServer::new(client));
+    let _ = client.add_handler(SteamCloud::new(client));
+    let _ = client.add_handler(SteamWorkshop::new(client));
+    let _ = client.add_handler(SteamUnifiedMessages::new(client));
+    let _ = client.add_handler(SteamScreenshots::new(client));
+    let _ = client.add_handler(SteamMatchmaking::new(client));
+    let _ = client.add_handler(SteamNetworking::new(client));
+    let _ = client.add_handler(SteamContent::new(client));
+    let _ = client.add_handler(SteamAuthTicket::new(client));
 }
 
 fn random_identifier() -> String {

@@ -184,7 +184,7 @@ async fn main() -> Result<()> {
     let steam_client = SteamClient::new();
 
     // add our custom handler to our steamclient
-    steam_client.add_typed_handler(MyHandler::new(&steam_client))?;
+    steam_client.add_handler(MyHandler::new(&steam_client))?;
 
     // get the steamuser handler, which is used for logging on after successfully connecting
     let steam_user = steam_client.get_required_handler::<SteamUser>()?;

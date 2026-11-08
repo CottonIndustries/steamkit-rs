@@ -2149,7 +2149,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "steamkit-nethook"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "chrono",
  "flate2",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "steamkit-rs"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "aes",
  "async-trait",
@@ -2198,7 +2198,7 @@ dependencies = [
 
 [[package]]
 name = "steamkit-rs-protos"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "prost",
  "prost-build",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "steamkit-samples"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "steamkit-tests"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2250,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "steamkit-tools"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "flate2",
  "hex",

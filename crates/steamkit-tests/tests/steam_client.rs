@@ -66,8 +66,8 @@ fn add_handler_adds_handler() {
 
     assert!(client.get_handler::<TestMsgHandler>().is_none());
 
-    // add_typed_handler keeps the handler retrievable through get_handler.
-    assert!(client.add_typed_handler(TestMsgHandler).is_ok());
+    // add_handler keeps the handler retrievable through get_handler.
+    assert!(client.add_handler(TestMsgHandler).is_ok());
 
     // The handler is wrapped in a fresh Arc internally, so check that it can
     // be retrieved rather than comparing identity.
@@ -77,7 +77,7 @@ fn add_handler_adds_handler() {
 #[test]
 fn remove_handler_removes_handler() {
     let client = SteamClient::new();
-    assert!(client.add_typed_handler(TestMsgHandler).is_ok());
+    assert!(client.add_handler(TestMsgHandler).is_ok());
     assert!(client.get_handler::<TestMsgHandler>().is_some());
 
     assert!(client.remove_handler_type::<TestMsgHandler>());
@@ -88,10 +88,10 @@ fn remove_handler_removes_handler() {
 #[test]
 fn remove_handler_removes_handler_by_instance() {
     let client = SteamClient::new();
-    assert!(client.add_typed_handler(TestMsgHandler).is_ok());
+    assert!(client.add_handler(TestMsgHandler).is_ok());
     assert!(client.get_handler::<TestMsgHandler>().is_some());
 
-    // add_typed_handler builds the Arc internally, so fetch it back and
+    // add_handler builds the Arc internally, so fetch it back and
     // remove that exact instance.
     let handler = client
         .get_handler::<TestMsgHandler>()
@@ -105,10 +105,10 @@ fn remove_handler_removes_handler_by_instance() {
 #[test]
 fn add_handler_throws_on_duplicate_handler() {
     let client = SteamClient::new();
-    assert!(client.add_typed_handler(TestMsgHandler).is_ok());
+    assert!(client.add_handler(TestMsgHandler).is_ok());
 
     // Adding the same handler type twice is an error.
-    let duplicate = client.add_typed_handler(TestMsgHandler);
+    let duplicate = client.add_handler(TestMsgHandler);
     assert!(
         matches!(duplicate, Err(SteamError::InvalidArgument(_))),
         "adding a duplicate handler must be rejected with InvalidArgument, got {duplicate:?}"

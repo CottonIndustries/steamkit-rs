@@ -159,9 +159,9 @@ impl SteamAuthentication {
         let pending = PendingRequests::default();
 
         if let Some(client) = client.upgrade() {
-            client.add_handler(Arc::new(AuthenticationServiceHandler {
+            let _ = client.add_handler(AuthenticationServiceHandler {
                 pending: pending.clone(),
-            }));
+            });
         }
 
         SteamAuthentication { client, pending }
