@@ -15,7 +15,7 @@ name = "steamkit"
 
 [dependencies]
 # The library only needs the `steam` and `gc` messages, which are always built.
-steamkit-protos = { package = "steamkit-rs-protos", version = "0.1.4", path = "../steamkit-protos", default-features = false }
+steamkit-protos = { package = "steamkit-rs-protos", version = "0.1.5", path = "../steamkit-protos", default-features = false }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
