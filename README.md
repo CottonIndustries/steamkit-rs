@@ -35,10 +35,10 @@ The test suite needs no network access; the few live tests are `#[ignore]`d.
 
 ## Documentation
 
-- [`SUMMARY.md`](SUMMARY.md) - the entry point: status, layout, architecture, key flows, deviations.
+- [`SUMMARY.md`](crates/SUMMARY.md) - the entry point: status, layout, architecture, key flows, deviations.
 - [`DEVELOPER_GUIDE.md`](crates/DEVELOPER_GUIDE.md) - the per-file guide to every module.
 - [`FILE_INDEX.md`](crates/FILE_INDEX.md) - module index with guide line numbers.
-- [`DEPENDENCIES.md`](DEPENDENCIES.md) - dependency inventory and release checklist.
+- [`DEPENDENCIES.md`](crates/DEPENDENCIES.md) - dependency inventory and release checklist.
 
 ## Platform support
 

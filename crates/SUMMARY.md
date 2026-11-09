@@ -147,9 +147,9 @@ The async model is the largest deliberate redesign:
 | File | What it holds |
 |---|---|
 | `README.md` | status, usage, build, platform support, samples, crate table |
-| `DEVELOPER_GUIDE.md` (repo: `crates/DEVELOPER_GUIDE.md`) | the ~10.5k-line per-file guide (969 KB): §3 architecture, §5 module reference, §10 known deviations, §12 bug history |
-| `FILE_INDEX.md` (repo: `crates/FILE_INDEX.md`) | 274 entries: module path → guide line number + LOC |
-| `DEPENDENCIES.md` | dependency inventory, upgrade chain, release checklist |
+| `crates/DEVELOPER_GUIDE.md` | the ~10.5k-line per-file guide (969 KB): §3 architecture, §5 module reference, §10 known deviations, §12 bug history |
+| `crates/FILE_INDEX.md` | 274 entries: module path → guide line number + LOC |
+| `crates/DEPENDENCIES.md` | dependency inventory, upgrade chain, release checklist |
 | `crates/steamkit/README.md` | the library crate's own README |
 | `crates/steamkit-protos/README.md` | the protos crate's own README |
 | `crates/steamkit-samples/src/bin/` | `000`-`013`, `020`-`022`, the `900`-`902` live checks, `999_test_bed` |

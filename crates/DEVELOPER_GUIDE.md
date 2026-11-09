@@ -443,11 +443,11 @@ These still apply to anyone working on the port:
 ```
 steamkit-rs/
   README.md
-  SUMMARY.md              the entry point and condensed guide
-  DEPENDENCIES.md         dependency inventory and upgrade checklist
   Cargo.toml
   Cargo.lock
   crates/
+    SUMMARY.md              the entry point and condensed guide
+    DEPENDENCIES.md         dependency inventory and upgrade checklist
     DEVELOPER_GUIDE.md      this file
     FILE_INDEX.md           every module, with the line of this guide that documents it
     steamkit/               THE LIBRARY
