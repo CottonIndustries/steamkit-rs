@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use parking_lot::Mutex;
-use rsa::pkcs1v15::Pkcs1v15Encrypt;
-use rsa::{BigUint, RsaPublicKey};
+use rsa::{BoxedUint, PublicKey};
 use steamkit_protos::steam::{
     CAuthenticationAccessTokenGenerateForAppRequest,
     CAuthenticationAccessTokenGenerateForAppResponse,
@@ -495,17 +494,15 @@ fn encrypt_password(
         },
     )?;
 
-    let key = RsaPublicKey::new(
-        BigUint::from_bytes_be(&modulus),
-        BigUint::from_bytes_be(&exponent),
+    let key = PublicKey::new(
+        BoxedUint::from_be_slice_vartime(&modulus),
+        BoxedUint::from_be_slice_vartime(&exponent),
     )
     .map_err(|error| {
         AuthenticationException::other(format!("Failed to import the RSA public key: {error}"))
     })?;
 
-    let mut rng = rsa::rand_core::OsRng;
-
-    key.encrypt(&mut rng, Pkcs1v15Encrypt, password.as_bytes())
+    key.pkcs1v15_encrypt(password.as_bytes())
         .map_err(|error| {
             AuthenticationException::other(format!("Failed to encrypt the password: {error}"))
         })

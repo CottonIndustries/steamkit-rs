@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use rand::Rng;
 use rsa::pkcs8::DecodePublicKey;
-use rsa::{Oaep, RsaPublicKey};
+use rsa::PublicKey;
 use sha1::Sha1;
 use tokio::sync::{broadcast, mpsc};
 
@@ -451,13 +451,10 @@ fn rsa_encrypt_oaep_sha1(
     public_key: &[u8],
     blob_to_encrypt: &[u8],
 ) -> Result<Vec<u8>, SteamError> {
-    let key = RsaPublicKey::from_public_key_der(public_key)
+    let key = PublicKey::from_public_key_der(public_key)
         .map_err(|err| SteamError::Crypto(format!("invalid RSA public key: {err}")))?;
 
-    let padding = Oaep::new::<Sha1>();
-    let mut rng = rsa::rand_core::OsRng;
-
-    key.encrypt(&mut rng, padding, blob_to_encrypt)
+    key.oaep_encrypt::<Sha1>(blob_to_encrypt)
         .map_err(|err| SteamError::Crypto(format!("RSA encryption failed: {err}")))
 }
 

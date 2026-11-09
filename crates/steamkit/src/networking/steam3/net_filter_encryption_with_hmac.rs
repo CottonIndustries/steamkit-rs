@@ -73,7 +73,7 @@ impl NetFilterEncryptionWithHMAC {
         let cipher = aes::Aes256::new_from_slice(&key)
             .map_err(|_| SteamError::InvalidArgument("invalid AES session key length".to_string()))?;
 
-        let hmac_template = <HmacSha1 as Mac>::new_from_slice(&secret)
+        let hmac_template = <HmacSha1 as KeyInit>::new_from_slice(&secret)
             .map_err(|_| SteamError::InvalidArgument("invalid HMAC key length".to_string()))?;
 
         Ok(Self {
