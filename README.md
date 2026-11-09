@@ -4,7 +4,7 @@ A Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .NET librar
 
 ## Status
 
-**Complete.** This is a full port of SteamKit2 **4.0.0-Beta.1** (commit `94812dc3`): every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, with no known behavioural gaps. The crate is **1.0.0**.
+**Complete.** This is a full port of SteamKit2 **4.0.0-Beta.1** (commit `94812dc3`): every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, with no known behavioural gaps. The crate is **1.0.1**.
 
 - 476 tests pass (`cargo test --workspace --no-fail-fast`); the live tests are `#[ignore]`d.
 - Protocol pins: SteamKit2 `94812dc3`, Protobufs `bdb3957d`.
@@ -15,7 +15,7 @@ It covers the CM protocol (TCP, WebSocket and UDP transports, channel encryption
 
 ```toml
 [dependencies]
-steamkit-rs = "1.0.0"
+steamkit-rs = "1.0.1"
 ```
 
 The package is `steamkit-rs` on crates.io (the `steamkit` name was taken), but the library is still called `steamkit`:
