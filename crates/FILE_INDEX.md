@@ -143,7 +143,7 @@ from the top.
 | 134 | `crates/steamkit/src/error.rs` | 3631 | 105 |
 | 135 | `crates/steamkit/src/lib.rs` | 3607 | 33 |
 | 136 | `crates/steamkit/src/networking/steam3/disconnected_event_args.rs` | 3936 | 15 |
-| 137 | `crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs` | 4015 | 492 |
+| 137 | `crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs` | 4015 | 489 |
 | 138 | `crates/steamkit/src/networking/steam3/i_connection.rs` | 3954 | 200 |
 | 139 | `crates/steamkit/src/networking/steam3/mod.rs` | 3930 | 12 |
 | 140 | `crates/steamkit/src/networking/steam3/net_filter_encryption_with_hmac.rs` | 3977 | 271 |
@@ -164,7 +164,7 @@ from the top.
 | 155 | `crates/steamkit/src/steam/authentication/i_authenticator.rs` | 6618 | 29 |
 | 156 | `crates/steamkit/src/steam/authentication/mod.rs` | 6474 | 10 |
 | 157 | `crates/steamkit/src/steam/authentication/qr_auth_session.rs` | 6592 | 124 |
-| 158 | `crates/steamkit/src/steam/authentication/steam_authentication.rs` | 6480 | 512 |
+| 158 | `crates/steamkit/src/steam/authentication/steam_authentication.rs` | 6480 | 509 |
 | 159 | `crates/steamkit/src/steam/authentication/user_console_authenticator.rs` | 6633 | 122 |
 | 160 | `crates/steamkit/src/steam/cdn/client.rs` | 6160 | 464 |
 | 161 | `crates/steamkit/src/steam/cdn/client_lancache.rs` | 6213 | 121 |

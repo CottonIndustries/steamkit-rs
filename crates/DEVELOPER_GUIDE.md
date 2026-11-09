@@ -120,7 +120,7 @@
     - [crates/steamkit/src/networking/steam3/protocol_type.rs — 67 lines](#cratessteamkitsrcnetworkingsteam3protocol_typers--67-lines)
     - [crates/steamkit/src/networking/steam3/i_connection.rs — 200 lines](#cratessteamkitsrcnetworkingsteam3i_connectionrs--200-lines)
     - [crates/steamkit/src/networking/steam3/net_filter_encryption_with_hmac.rs — 271 lines](#cratessteamkitsrcnetworkingsteam3net_filter_encryption_with_hmacrs--271-lines)
-    - [crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs — 492 lines](#cratessteamkitsrcnetworkingsteam3envelope_encrypted_connectionrs--492-lines)
+    - [crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs — 489 lines](#cratessteamkitsrcnetworkingsteam3envelope_encrypted_connectionrs--489-lines)
     - [crates/steamkit/src/networking/steam3/proxy.rs — 479 lines](#cratessteamkitsrcnetworkingsteam3proxyrs--479-lines)
     - [crates/steamkit/src/networking/steam3/tcp_connection.rs — 323 lines](#cratessteamkitsrcnetworkingsteam3tcp_connectionrs--323-lines)
     - [crates/steamkit/src/networking/steam3/udp_packet.rs — 413 lines](#cratessteamkitsrcnetworkingsteam3udp_packetrs--413-lines)
@@ -219,7 +219,7 @@
     - [5.4 authentication/ — QR and password login](#54-authentication--qr-and-password-login)
     - [The flow, end to end](#the-flow-end-to-end)
     - [crates/steamkit/src/steam/authentication/mod.rs — 10 lines](#cratessteamkitsrcsteamauthenticationmodrs--10-lines)
-    - [crates/steamkit/src/steam/authentication/steam_authentication.rs — 512 lines](#cratessteamkitsrcsteamauthenticationsteam_authenticationrs--512-lines)
+    - [crates/steamkit/src/steam/authentication/steam_authentication.rs — 509 lines](#cratessteamkitsrcsteamauthenticationsteam_authenticationrs--509-lines)
     - [crates/steamkit/src/steam/authentication/auth_session.rs — 413 lines](#cratessteamkitsrcsteamauthenticationauth_sessionrs--413-lines)
     - [crates/steamkit/src/steam/authentication/auth_session_details.rs — 99 lines](#cratessteamkitsrcsteamauthenticationauth_session_detailsrs--99-lines)
     - [crates/steamkit/src/steam/authentication/qr_auth_session.rs — 124 lines](#cratessteamkitsrcsteamauthenticationqr_auth_sessionrs--124-lines)
@@ -4012,7 +4012,7 @@ offset  size  field
 - **Allocation profile.** The C# rents its output buffer from `ArrayPool<byte>.Shared`; the Rust port allocates a fresh `Vec` per outgoing packet and returns it. This is a throughput difference, not a wire difference.
 - `NetFilterEncryptionWithHMAC` implements `Clone` and a manual `Debug` that does not print the key material (`finish_non_exhaustive`).
 
-#### `crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs` — 492 lines
+#### `crates/steamkit/src/networking/steam3/envelope_encrypted_connection.rs` — 489 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Networking/Steam3/EnvelopeEncryptedConnection.cs`
 **Purpose:** A decorator that sits on top of any `IConnection` and performs Steam's channel-encryption handshake. It answers the server's `ChannelEncryptRequest` with an RSA-OAEP-SHA1 blob carrying a fresh 32-byte session key, and from then on every frame is AES-256-CBC + HMAC-SHA1.
 **How it works:**
@@ -6477,7 +6477,7 @@ The C# uses class inheritance to model "a session is either a credentials sessio
 **How it works:** `access_token_generate_result`, `auth_poll_result`, `auth_session`, `auth_session_details`, `authentication_exception`, `credentials_auth_session`, `i_authenticator`, `qr_auth_session`, `steam_authentication`, `user_console_authenticator`.
 **Notes and gotchas:** `steam_authentication.rs` is the entry point; it is reached through `SteamClient::authentication()`.
 
-#### `crates/steamkit/src/steam/authentication/steam_authentication.rs` — 512 lines
+#### `crates/steamkit/src/steam/authentication/steam_authentication.rs` — 509 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Steam/Authentication/SteamAuthentication.cs`
 **Purpose:** The handler that talks to Steam's `Authentication` unified messaging service: it starts sessions, polls them, sends Steam Guard codes and generates access tokens.
 **How it works:**
@@ -6501,7 +6501,7 @@ The C# uses class inheritance to model "a session is either a credentials sessio
 - `poll_auth_session_status(client_id, request_id)` → `PollAuthSessionStatus`. The result can be `Expired`, `FileNotFound` or `Fail`; anything but `OK` is `AuthenticationException::failed("Failed to poll status", result)`.
 - `send_steam_guard_code(client_id, steam_id, code, code_type)` → `UpdateAuthSessionWithSteamGuardCode`. `EResult::DuplicateRequest` is **tolerated** — it happens when the user already accepted the prompt in the mobile app and the code is then sent anyway; the authentication succeeds on the next poll. Every other non-`OK` result is an error.
 
-*Helpers.* `device_details(details)` builds the `CAuthenticationDeviceDetails` (the friendly name, the platform type, the OS type). `encrypt_password(public_key, password)` hex-decodes the modulus and the exponent, imports them into an `rsa::RsaPublicKey` and encrypts with `Pkcs1v15Encrypt` — the counterpart of the C#'s `RSAEncryptionPadding.Pkcs1`.
+*Helpers.* `device_details(details)` builds the `CAuthenticationDeviceDetails` (the friendly name, the platform type, the OS type). `encrypt_password(public_key, password)` hex-decodes the modulus and the exponent, imports them as `rsa::BoxedUint` values into an `rsa::PublicKey` and encrypts with `pkcs1v15_encrypt` — the counterpart of the C#'s `RSAEncryptionPadding.Pkcs1`.
 
 **Notes and gotchas:**
 
