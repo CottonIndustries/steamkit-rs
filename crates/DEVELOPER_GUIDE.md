@@ -20,7 +20,7 @@
 - [1. What this is](#1-what-this-is)
   - [1.1 The single most important thing to know](#11-the-single-most-important-thing-to-know)
   - [1.2 The standing constraints](#12-the-standing-constraints)
-  - [1.3 The four documents beside this one](#13-the-four-documents-beside-this-one)
+  - [1.3 The documents beside this one](#13-the-documents-beside-this-one)
 - [2. Repository layout](#2-repository-layout)
   - [2.1 The crate dependency graph](#21-the-crate-dependency-graph)
 - [3. The architecture](#3-the-architecture)
@@ -423,20 +423,17 @@ These still apply to anyone working on the port:
 
 - **The C# tree is READ-ONLY.** Never write to `csharp-original/`, nor to the upstream
   checkout it was copied from. All output goes to `crates/`.
-- **Subagents:** only the minimax-pinned ones — `explore-minimax`, `librarian-minimax`,
-  `oracle-minimax`, `multimodal-looker-minimax`, the generic worker categories (`deep`,
-  `quick`, `unspecified-low`, `unspecified-high`, `ultrabrain`, `writing`,
-  `Sisyphus-Junior`, `general`, `plan`) and `visual-engineering`. **No** Step-5 agents
-  (`explore`, `librarian`, `metis`, `momus` were the Step-5 set — do not launch them).
-  The `build` agent is prohibited; implementation stays with the main agent and the
-  workers. `oracle` (GLM) needs the user's one-time yes.
+- **Subagents:** follow the user's current tier policy — every allowed subagent runs on
+  `opencode-go/deepseek-v4.1-flash`; `build` is prohibited; `oracle` needs a one-time yes.
 - **No git commits** unless the user asks.
 - **Report CLOCK time**, never a bare duration.
 
-### 1.3 The document beside this one
+### 1.3 The documents beside this one
 
 | Document | What it is | Read it when |
 |---|---|---|
+| `SUMMARY.md` | the entry point: status, layout, architecture, key flows, conventions and deviations | you are new to the tree or resuming the project |
+| `DEPENDENCIES.md` | dependency inventory, upgrade chain, and the SteamKit2/protobuf refresh checklist | you are bumping a pin or reviewing maintenance |
 | `FILE_INDEX.md` | every module, with the line of this guide that documents it | you want the guide section for a specific file |
 
 ---
@@ -446,6 +443,8 @@ These still apply to anyone working on the port:
 ```
 steamkit-rs/
   README.md
+  SUMMARY.md              the entry point and condensed guide
+  DEPENDENCIES.md         dependency inventory and upgrade checklist
   Cargo.toml
   Cargo.lock
   crates/
@@ -2545,7 +2544,7 @@ private address in the logon request.
   the conversion is lossless.
 * The C# `ExtractEndpointHost` handles a `DnsEndPoint` by returning the host name. A Rust
   `SocketAddr` always holds a resolved IP, so the host part is always the numeric address. This
-  is a consequence of `PORTING_CONTRACT` §12, which freezes the connection API to `SocketAddr`.
+  is a consequence of `SUMMARY.md` §8, which freezes the connection API to `SocketAddr`.
 
 #### `crates/steamkit/src/util/scheduled_function.rs` — 144 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Util/ScheduledFunction.cs`
@@ -3626,14 +3625,14 @@ Cargo lints and inner attributes are independent mechanisms, and the port keeps 
 
 **The library never creates a runtime.** tokio is a plain dependency (`tokio = { version = "1", features = ["full"] }`) and the runtime belongs to the *consumer*: the library uses `tokio::spawn`, `tokio::select!`, `tokio::time::interval`, `tokio::sync::{broadcast, mpsc, oneshot}` and `tokio_util::sync::CancellationToken`, but it never calls `tokio::main` and never builds a `Runtime` itself. Two consequences run through `cm_client.rs`: `CMClient::connect` can only be awaited from inside a runtime, and `CMClient::restart_heart_beat` probes `tokio::runtime::Handle::try_current()` and silently starts no heartbeat when there is none. The C# has the same division of labour in reverse — it has no runtime of its own, but it owns the threads (`Task`, `Timer`, `CancellationTokenSource`).
 
-The module tree is a mirror, not a copy. `SteamKit2.Internal` is *split* across `steam::cm_client`, `steam::handlers`, `steam::cdn`, `steam::discovery`, `steam::webapi` and `steam::authentication`, because in C# that namespace is a flat dumping ground shared by all of them; the reverse mapping is not one-to-one either, since `steam::` holds eight submodules where C# had one namespace. `SteamError` is the **only** root re-export — `SteamResult<T>` is *not* re-exported and lives at `steamkit::error::SteamResult`, the path PORTING_CONTRACT §12 names explicitly. The doc table's intra-doc links (`[`base`]`, `[`steam::cm_client`]`, …) only resolve because every one of those modules is `pub`; a private module would turn the link into a rustdoc warning.
+The module tree is a mirror, not a copy. `SteamKit2.Internal` is *split* across `steam::cm_client`, `steam::handlers`, `steam::cdn`, `steam::discovery`, `steam::webapi` and `steam::authentication`, because in C# that namespace is a flat dumping ground shared by all of them; the reverse mapping is not one-to-one either, since `steam::` holds eight submodules where C# had one namespace. `SteamError` is the **only** root re-export — `SteamResult<T>` is *not* re-exported and lives at `steamkit::error::SteamResult`, the path `SUMMARY.md` §8 names explicitly. The doc table's intra-doc links (`[`base`]`, `[`steam::cm_client`]`, …) only resolve because every one of those modules is `pub`; a private module would turn the link into a rustdoc warning.
 
 #### `crates/steamkit/src/error.rs` — 105 lines
 **C# counterpart:** none — there is no single C# counterpart. The C# signals failure with `System.Exception` and its subclasses, of which SteamKit2 defines `SteamKit2.AuthenticationException` (with an `EResult Result` property), `SteamKit2.AsyncJobFailedException`, `SteamKit2.WebAPIRequestException` and `SteamKit2.SteamKitWebRequestException` (an `HttpRequestException`), plus the BCL's `ArgumentException`, `InvalidDataException`, `IOException`, `SocketException`, `TimeoutException` and `OperationCanceledException`. This one enum consolidates all of them.
 **Purpose:** The crate-wide error type. Every fallible public API in the port returns `Result<T, SteamError>`; nothing in `crates/steamkit` throws, and nothing panics on data that came off the wire.
 **How it works:** Two items, plus three constructor helpers.
 
-*The alias.* `pub type SteamResult<T> = Result<T, SteamError>;` — the alias PORTING_CONTRACT §12 requires (`// steamkit::error::SteamResult<T> = Result<T, SteamError> (add this alias in error.rs)`). Every public signature in the crate is written in terms of it.
+*The alias.* `pub type SteamResult<T> = Result<T, SteamError>;` — the alias `SUMMARY.md` §8 requires (`// steamkit::error::SteamResult<T> = Result<T, SteamError> (add this alias in error.rs)`). Every public signature in the crate is written in terms of it.
 
 *The enum.* `#[derive(Debug, thiserror::Error)]` plus `#[non_exhaustive]`, with seventeen variants. `thiserror` reads the `#[error("…")]` attributes to generate the `Display` implementation, and the `#[from]` attributes to generate the `From` conversions and the `source()` chain. The variants:
 
@@ -3735,7 +3734,7 @@ The Rust port tries them in the same order as the C#: **WebSocket, TCP, UDP**.
 
 `universe` and `debug_network_listener` are read from the `&CMClient` the factory is handed, which is why the first parameter is the client and not just the record.
 
-*Why the factory takes the `&ServerRecord`.* PORTING_CONTRACT §12 freezes `IConnection::connect` to `async fn connect(&self, end_point: SocketAddr, timeout: Duration)`. A `SocketAddr` is an address — it has **no host name**. The C# has no such restriction: it builds the websocket URI from the `EndPoint`, and a `DnsEndPoint` keeps the host name (`cmp1-sea1.steamserver.net`), which is also the **TLS server name** — the name the `wss://` handshake presents as SNI and the name Steam's certificate is issued for. Resolving the name to an address and handing only the address to the transport would make the TLS handshake present an IP address, and the certificate would not validate. The port therefore keeps the name alive: `ServerRecord::get_host()` returns the host of the record's `EndPoint` (an `EndPoint::Dns` keeps it, an `EndPoint::Ip` has none), `WebSocketConnection::new_tungstenite_for_host` stores it, and `WebSocketConnection::connect` then calls `construct_uri_for_host(host, end_point.port())` instead of `construct_uri(end_point)`. The *record* is the natural carrier of that name, which is exactly why the factory signature takes it.
+*Why the factory takes the `&ServerRecord`.* `SUMMARY.md` §8 freezes `IConnection::connect` to `async fn connect(&self, end_point: SocketAddr, timeout: Duration)`. A `SocketAddr` is an address — it has **no host name**. The C# has no such restriction: it builds the websocket URI from the `EndPoint`, and a `DnsEndPoint` keeps the host name (`cmp1-sea1.steamserver.net`), which is also the **TLS server name** — the name the `wss://` handshake presents as SNI and the name Steam's certificate is issued for. Resolving the name to an address and handing only the address to the transport would make the TLS handshake present an IP address, and the certificate would not validate. The port therefore keeps the name alive: `ServerRecord::get_host()` returns the host of the record's `EndPoint` (an `EndPoint::Dns` keeps it, an `EndPoint::Ip` has none), `WebSocketConnection::new_tungstenite_for_host` stores it, and `WebSocketConnection::connect` then calls `construct_uri_for_host(host, end_point.port())` instead of `construct_uri(end_point)`. The *record* is the natural carrier of that name, which is exactly why the factory signature takes it.
 
 *The bug this fixed — the port could not reach Steam at all.* The port shipped a `WebSocketConnection` and a `tokio-tungstenite` factory, but `default_connection_factory` **never used them**, and its order was TCP → UDP → WebSocket instead of the C#'s WebSocket → TCP → UDP. A WebSocket-only server candidate therefore could not connect at all: the protocol mask would contain only the `WEB_SOCKET` bit, the factory fell through to the UDP branch, and it built a `UdpConnection` — the Steam datagram protocol — to talk to a TLS port. That matters because the **default fallback server list holds the WebSocket-only server first**: `SmartCMServerList::resolve_server_list` ends with
 
@@ -3795,7 +3794,7 @@ The receiver is `self: &Arc<Self>` because the method spawns the dispatch task, 
 1. `self.disconnect_with(true).await` — the C# `Connect` opens with `Disconnect( userInitiated: true )`, so a reconnect never leaves the old socket alive. `connect` itself then increments `generation`, resets `expect_disconnection` and `connected_handled` to false and installs a fresh `CancellationToken` in `connection_cancellation`.
 2. **Server candidate.** `match cm_server { Some(record) => Some(record), None => self.servers.get_next_server_candidate_async(self.configuration.protocol_types()).await }` — the C# `Servers.GetNextServerCandidateAsync( Configuration.ProtocolTypes )`, the same call with the same argument.
 3. **No candidate.** The client logs "Server record task returned no result.", calls `on_client_disconnected(false)` and returns `Err(SteamError::Connection("no server candidate is available".to_owned()))`. The C# logs the same sentence and calls `OnClientDisconnected( userInitiated: false )` from inside its continuation; it has no error to hand back, because its `Connect` returns `void`.
-4. **The endpoint.** `let end_point = record.end_point();` — the C# passes `record.EndPoint` to `newConnection.Connect(...)` and resolves the DNS name at that moment. The Rust port resolves the host name *when the server record is created* (PORTING_CONTRACT §12 requires a `SocketAddr`), so `end_point()` is already an address; the host name survives in the record's `EndPoint::Dns` and is used by the websocket transport.
+4. **The endpoint.** `let end_point = record.end_point();` — the C# passes `record.EndPoint` to `newConnection.Connect(...)` and resolves the DNS name at that moment. The Rust port resolves the host name *when the server record is created* (`SUMMARY.md` §8 requires a `SocketAddr`), so `end_point()` is already an address; the host name survives in the record's `EndPoint::Dns` and is used by the websocket transport.
 5. **The session is opened.** `self.open_session(record, generation).await` — everything that creates a connection now lives in `open_session`; `connect` is `open_session` plus starting the dispatch loop.
 6. **The dispatch loop is spawned** with the session **by value**: `tokio::spawn(async move { this.dispatch_loop(session, task_cancellation, generation).await; })`.
 7. **The socket is opened last:** `connect_target.connect(end_point, self.connection_timeout()).await`. On failure the client logs "Unhandled exception when attempting to connect to Steam: {error}", cancels the dispatch loop, calls `end_session(generation, ..., false)` — which announces the disconnection once — and returns the error. Cancelling the loop matters: it used to be left running, and the WebSocket transport, which also raises `Disconnected` for a failed attempt, could make it announce the failure a second time or start a move to another server. The C# does the same from the second continuation of its `Task.ContinueWith`, but it has no error to hand back — its `Connect` is `void` and the failure surfaces as a `DisconnectedCallback`.
@@ -3818,7 +3817,7 @@ The dispatch loop **owns** the session. It owns the session by value, so it can 
 async fn open_session(self: &Arc<Self>, record: ServerRecord, generation: u64) -> Result<ConnectionSession, SteamError>
 ```
 
-1. **The protocol mask.** `let protocol = ProtocolTypes(record.protocol_types().raw() & self.configuration.protocol_types().raw());` — the C# `record.ProtocolTypes & Configuration.ProtocolTypes`. The intersection is what the candidate supports *and* what the client is configured for. `ProtocolTypes` is a newtype over the raw `u32` bit mask (PORTING_CONTRACT §13.3), so the `&` is done on `.raw()` and the result re-wrapped.
+1. **The protocol mask.** `let protocol = ProtocolTypes(record.protocol_types().raw() & self.configuration.protocol_types().raw());` — the C# `record.ProtocolTypes & Configuration.ProtocolTypes`. The intersection is what the candidate supports *and* what the client is configured for. `ProtocolTypes` is a newtype over the raw `u32` bit mask (`SUMMARY.md` §8), so the `&` is done on `.raw()` and the result re-wrapped.
 2. **The connection.** `let factory = self.connection_factory.read().clone(); let connection = match factory { Some(factory) => factory(self, &record, protocol)?, None => default_connection_factory(self, &record, protocol)? };`. An installed factory wins over the default one.
 3. **The event stream is subscribed before the socket is opened** — `connection.events()`, so that no event can be missed. The C# does the same thing with `newConnection.NetMsgReceived += NetMsgReceived;` before `newConnection.Connect(...)`.
 4. **The connection and the outbound queue are installed** — under the connection lock, and only while `generation` is still current; a superseded session gets `SteamError::Cancelled` instead of overwriting the newer session's connection. The outbound queue is `mpsc::unbounded_channel::<Bytes>()`: the sender goes into `self.outbound`, and a spawned task drains the receiver and calls `writer_connection.send(bytes).await`. A write failure is logged at debug level and the loop continues. The queue exists so that the *order* in which messages were handed to `CMClient::send` is preserved even though the write itself is asynchronous.
@@ -3834,7 +3833,7 @@ async fn open_session(self: &Arc<Self>, record: ServerRecord, generation: u64) -
 
 
 
-The C# `Send` differs in three ways. It *mutates* the message it is handed (`msg.SessionID = sessionID.Value; msg.SteamID = steamID;`), it swallows `IOException` and `SocketException` — "we'll swallow any network failures here because they will be thrown later on the network thread, and that will lead to a disconnect callback down the line" — and it has no equivalent of the per-message log line. The Rust port applies the identity to the **serialised bytes** instead (the `send` signature is frozen by PORTING_CONTRACT §14.3), reports the failure instead of swallowing it, and logs every message as the C# does.
+The C# `Send` differs in three ways. It *mutates* the message it is handed (`msg.SessionID = sessionID.Value; msg.SteamID = steamID;`), it swallows `IOException` and `SocketException` — "we'll swallow any network failures here because they will be thrown later on the network thread, and that will lead to a disconnect callback down the line" — and it has no equivalent of the per-message log line. The Rust port applies the identity to the **serialised bytes** instead (the `send` signature is frozen by `SUMMARY.md` §8), reports the failure instead of swallowing it, and logs every message as the C# does.
 
 *Stamping the identity.* `serialize_message` reads the current `session_id` and `steam_id`; if neither is known the message is serialised unchanged — the C# does the same, because it only sets the fields it has. Otherwise `stamp_identity(msg, bytes, session_id, steam_id)` rewrites the bytes:
 
@@ -3936,7 +3935,7 @@ Every type here is `unsafe`-free (the crate is `#![forbid(unsafe_code)]`), and n
 #### `crates/steamkit/src/networking/steam3/disconnected_event_args.rs` — 15 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Networking/Steam3/DisconnectedEventArgs.cs`
 **Purpose:** The payload of the `Disconnected` event, carrying one bit: whether the disconnection was requested by the consumer. It is the only argument the three connection events share besides the net message payload.
-**How it works:** A `struct DisconnectedEventArgs { pub user_initiated: bool }` with a `new(user_initiated: bool)` constructor. It derives `Clone, Copy, Debug, PartialEq, Eq`; the shape is fixed by PORTING_CONTRACT §13.3.
+**How it works:** A `struct DisconnectedEventArgs { pub user_initiated: bool }` with a `new(user_initiated: bool)` constructor. It derives `Clone, Copy, Debug, PartialEq, Eq`; the shape is fixed by `SUMMARY.md` §8.
 **Notes and gotchas:** The C# class derives from `System.EventArgs` and exposes a get-only `UserInitiated` property. The Rust type is a plain struct with no `EventArgs` base (there is no such thing in Rust) and is `Copy` — `Copy` is required in practice because the value is pushed through a `broadcast::Sender`, whose payload bound is `Clone`, and `Copy` is the cheapest way to satisfy that. `Copy` also means a subscriber can keep the value after the channel drops it.
 
 #### `crates/steamkit/src/networking/steam3/net_msg_event_args.rs` — 27 lines
@@ -3948,12 +3947,12 @@ Every type here is `unsafe`-free (the crate is `#![forbid(unsafe_code)]`), and n
 #### `crates/steamkit/src/networking/steam3/protocol_type.rs` — 67 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Networking/Steam3/ProtocolType.cs`
 **Purpose:** Models the C# `[Flags] enum ProtocolTypes`, which selects which transports a client is allowed to use when connecting to a CM server.
-**How it works:** `pub struct ProtocolTypes(pub u32)` — a newtype over the raw bit mask, as mandated by PORTING_CONTRACT §13.3. Constants: `NONE = 0`, `TCP = 1 << 0`, `UDP = 1 << 1`, `WEB_SOCKET = 1 << 2`, `ALL = 7`. `raw()` returns the mask; `flags()` yields the individual set flags in `Tcp`, `Udp`, `WebSocket` order (the counterpart of the C# `ProtocolTypesExtensions.GetFlags` iterator). `BitOr` and `BitOrAssign` are implemented so masks combine with `|`. `Default` is `NONE`.
+**How it works:** `pub struct ProtocolTypes(pub u32)` — a newtype over the raw bit mask, as mandated by `SUMMARY.md` §8. Constants: `NONE = 0`, `TCP = 1 << 0`, `UDP = 1 << 1`, `WEB_SOCKET = 1 << 2`, `ALL = 7`. `raw()` returns the mask; `flags()` yields the individual set flags in `Tcp`, `Udp`, `WebSocket` order (the counterpart of the C# `ProtocolTypesExtensions.GetFlags` iterator). `BitOr` and `BitOrAssign` are implemented so masks combine with `|`. `Default` is `NONE`.
 **Notes and gotchas:** `has(other)` is `(self.0 & other.0) > 0` — **any of**, not all of. This is exactly the C# `HasFlagsFast` extension (`(self & flags) > 0`) and is deliberately *not* the stricter BCL `Enum.HasFlag` semantics, which requires every bit of the argument to be present. The distinction matters: `ProtocolTypes::ALL.has(ProtocolTypes::TCP | ProtocolTypes::UDP)` is `true` here, because some bits overlap, even though `ALL` also contains `WebSocket`. Callers that want "contains exactly this set" must compare `raw()` values. `ProtocolTypes::NONE.has(x)` is `false` for every `x` except `NONE` itself (`0 & 0 > 0` is still false), so `NONE` never matches anything. `flags()` uses `has`, so a mask with an unknown bit set silently ignores that bit. The struct is `Copy + Eq + Hash + Ord`, so it can be a map key.
 
 #### `crates/steamkit/src/networking/steam3/i_connection.rs` — 200 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Networking/Steam3/IConnection.cs`
-**Purpose:** Defines the transport-agnostic connection interface that the CM client programs against, plus the plumbing that carries the three C# connection events. The C# interface mixes the operations and the events in one type; the Rust port splits them, because PORTING_CONTRACT §12 freezes the shape of `IConnection` and that shape has no event methods.
+**Purpose:** Defines the transport-agnostic connection interface that the CM client programs against, plus the plumbing that carries the three C# connection events. The C# interface mixes the operations and the events in one type; the Rust port splits them, because `SUMMARY.md` §8 freezes the shape of `IConnection` and that shape has no event methods.
 **How it works:** Three traits and one helper struct.
 
 - `IConnection` (frozen by contract §12, `#[async_trait]`): `current_end_point(&self) -> Option<SocketAddr>`, `protocol_types(&self) -> ProtocolTypes`, `async connect(&self, end_point: SocketAddr, timeout: Duration) -> Result<(), SteamError>`, `async disconnect(&self, user_initiated: bool)`, `async send(&self, data: Bytes) -> Result<(), SteamError>`, `local_ip(&self) -> Option<IpAddr>`. The trait requires `Send + Sync`.
@@ -4230,7 +4229,7 @@ Three properties hold across the whole directory and are worth stating once:
 
 1. **No panics.** Every fallible path returns `SteamError`. The C# throws `InvalidOperationException` in a few places (`GetRequiredHandler`, `AddHandler` on a duplicate, `ArgumentNullException` on a null argument); the Rust port returns an `Err` instead.
 2. **No `unsafe`.** The crate is `#![forbid(unsafe_code)]`.
-3. **The handler-facing API is frozen.** PORTING_CONTRACT §14.3 fixes the surface that all fifteen handler sections code against. Two signatures in the shipped code deviate from that freeze in the direction of *not* panicking (`get_required_handler` returns a `Result`); they are called out in the entries below.
+3. **The handler-facing API is frozen.** `SUMMARY.md` §8 fixes the surface that all fifteen handler sections code against. Two signatures in the shipped code deviate from that freeze in the direction of *not* panicking (`get_required_handler` returns a `Result`); they are called out in the entries below.
 
 #### `crates/steamkit/src/steam/steam_client/mod.rs` — 6 lines
 **C# counterpart:** none — the C# `SteamKit2` namespace is flat and has no per-directory manifest; this file is the Rust module list.
@@ -4268,7 +4267,7 @@ Three properties hold across the whole directory and are worth stating once:
 **Notes and gotchas:**
 
 - **The C# `SteamClient` inherits roughly forty public members from `CMClient`; the Rust port forwards them by hand.** Anything the C# exposed on `CMClient` that the port did not forward is only reachable through `cm_client()`. When adding a member to `CMClient`, check whether it also needs a forwarding method here.
-- **`get_required_handler` returns a `Result`, not `Arc<T>`.** PORTING_CONTRACT §14.3 froze the signature as `pub fn get_required_handler<T>(&self) -> Arc<T>`, but the C# throws `InvalidOperationException` there, and the crate forbids panicking in library code. The shipped signature is `Result<Arc<T>, SteamError>` with `SteamError::NotFound`. Handlers that need the handler must add `?` or `.expect(...)` at the call site.
+- **`get_required_handler` returns a `Result`, not `Arc<T>`.** `SUMMARY.md` §8 froze the signature as `pub fn get_required_handler<T>(&self) -> Arc<T>`, but the C# throws `InvalidOperationException` there, and the crate forbids panicking in library code. The shipped signature is `Result<Arc<T>, SteamError>` with `SteamError::NotFound`. Handlers that need the handler must add `?` or `.expect(...)` at the call site.
 - **`add_handler` rejects a duplicate *type*.** It is generic over the handler type and records `TypeId::of::<T>()`, so a second handler of the same type returns `SteamError::InvalidArgument`, matching the C# `GetType()` comparison and `InvalidOperationException`.
 - **`post_callback` queues before completing the job.** That is the C# order (`callbackQueue.Post(msg)` then `jobManager.TryCompleteJob(...)`), so a waiter that wakes up can already see the queued callback.
 - **Only one task can wait on the callback queue at a time.** `wait_for_callback` holds the receiver's `tokio::sync::Mutex` for the whole wait, so a second concurrent waiter blocks on the mutex rather than receiving a message of its own. The C#'s `BufferBlock<CallbackMsg>.Receive` supports multiple receivers. `get_callback` uses `try_lock` and returns `None` when another task currently holds the lock, so a poll loop can spuriously observe "no callback" while another task is waiting.
@@ -4379,7 +4378,7 @@ Three properties hold across the whole directory and are worth stating once:
 **C# counterpart:** `SteamKit2/SteamKit2/Steam/SteamClient/Callbacks.cs`
 **Purpose:** The two lifecycle callbacks the client posts for itself: "we are connected" and "we are disconnected".
 **How it works:** `pub struct ConnectedCallback { base: CallbackMsgBase }` and `pub struct DisconnectedCallback { base: CallbackMsgBase, user_initiated: bool }`. Each implements the four `CallbackMsg` methods by forwarding to the embedded `CallbackMsgBase`; `DisconnectedCallback` adds `user_initiated()`. Both derive `Clone, Copy, Debug, Default`, and `DisconnectedCallback::new(user_initiated)` is the constructor.
-**Notes and gotchas:** The C# declares them as *nested* types — `SteamClient.ConnectedCallback` and `SteamClient.DisconnectedCallback` — in a `partial class SteamClient`. PORTING_CONTRACT §4 requires the flattening, so in Rust they are top-level types in `steamkit::steam::steam_client`. Their C# constructors are `internal`; the Rust ones are `pub`, because `SteamClient::on_client_connected` / `on_client_disconnected` construct them from another module. `DisconnectedCallback` is `Copy` in Rust (the C# is a reference type), which is why `post_callback_typed` can take it by value and box it. `DisconnectedCallback::user_initiated` is `false` when the disconnection came from a network failure or a forcible server-side disconnect, and `true` when the consumer called `disconnect()` — the same distinction the C# documents. Note the naming collision with the transport-level `DisconnectedEventArgs`, which carries the same flag but lives in `networking::steam3`.
+**Notes and gotchas:** The C# declares them as *nested* types — `SteamClient.ConnectedCallback` and `SteamClient.DisconnectedCallback` — in a `partial class SteamClient`. `SUMMARY.md` §8 requires the flattening, so in Rust they are top-level types in `steamkit::steam::steam_client`. Their C# constructors are `internal`; the Rust ones are `pub`, because `SteamClient::on_client_connected` / `on_client_disconnected` construct them from another module. `DisconnectedCallback` is `Copy` in Rust (the C# is a reference type), which is why `post_callback_typed` can take it by value and box it. `DisconnectedCallback::user_initiated` is `false` when the disconnection came from a network failure or a forcible server-side disconnect, and `true` when the consumer called `disconnect()` — the same distinction the C# documents. Note the naming collision with the transport-level `DisconnectedEventArgs`, which carries the same flag but lives in `networking::steam3`.
 
 #### `crates/steamkit/src/steam/steam_client/configuration/mod.rs` — 5 lines
 **C# counterpart:** none — the C# `Configuration` folder lives in the `SteamKit2` namespace without a namespace of its own; this file is the Rust module list.
@@ -5951,7 +5950,7 @@ pub enum EndPoint {
 
 **Notes and gotchas:**
 
-- **The Rust resolves the host name when the record is created; the C# does not.** The C# stores a lazy `System.Net.DnsEndPoint`, and the name is only resolved when a connection is made. PORTING_CONTRACT §12 fixes `IConnection::connect` to take a `SocketAddr`, so the port resolves eagerly and keeps both the name and the address. Two consequences: the factories that accept a host name are `async`, and a record created for an unresolvable name fails immediately with `SteamError::Connection` instead of at connect time.
+- **The Rust resolves the host name when the record is created; the C# does not.** The C# stores a lazy `System.Net.DnsEndPoint`, and the name is only resolved when a connection is made. `SUMMARY.md` §8 fixes `IConnection::connect` to take a `SocketAddr`, so the port resolves eagerly and keeps both the name and the address. Two consequences: the factories that accept a host name are `async`, and a record created for an unresolvable name fails immediately with `SteamError::Connection` instead of at connect time.
 - **The DNS name is not redundant.** It is needed as the TLS server name of a WebSocket connection, which is why `EndPoint::Dns` stores `host` next to `address` and why `ServerRecord::endpoint()` (as opposed to `end_point()`) exists.
 - **`get_port()` returns `u16`; the C# returns `int`.** The C#'s `GetPort()` extracts the port from an `EndPoint`; the Rust narrows it to the wire type.
 - **The port split is on the first colon**, so an IPv6 literal (`"::1:27017"`) is mis-parsed. The C#'s `CreateServerFromDns` has the same `IndexOf(':')` behaviour, so this is a faithful port rather than a new bug — but do not feed IPv6 literals to these factories.
@@ -8869,7 +8868,7 @@ unnecessary and the tests are fully independent. Three deviations are
 documented in the file header: the C# `ServerRecord.CreateWebSocketServer(
 "host:port")` factory stores the host name and the port in a `DnsEndPoint` and
 only resolves the host name when a connection is made, while the Rust factory
-resolves it up front, because `PORTING_CONTRACT` §12 requires connections to be
+resolves it up front, because `SUMMARY.md` §8 requires connections to be
 made to a `SocketAddr` - the tests therefore call the library factory and await
 it, using host names that resolve locally (`localhost` from the hosts file, the
 rest IP literals); the C# `GetNextServerCandidate` blocks on a background fetch
@@ -10029,7 +10028,7 @@ factory.
 ### 10.2 The websocket URI needs the host name
 
 The C# builds the URI from the `EndPoint`, and a `DnsEndPoint` keeps the host name — which
-is also the TLS server name. `PORTING_CONTRACT` §12 freezes `IConnection::connect` to take a
+is also the TLS server name. `SUMMARY.md` §8 freezes `IConnection::connect` to take a
 `SocketAddr`, which has lost the host name, so the port carries the host name alongside the
 server record and uses it for the URI. This is why the `ConnectionFactory` takes the record.
 
@@ -10069,7 +10068,7 @@ The machine-ID collection has per-platform implementations. The macOS (IOKit) an
 ### 10.8 DNS is resolved eagerly
 
 The C# keeps a lazy `DnsEndPoint` and resolves at connect time. The port resolves the host
-when the server record is created, because `PORTING_CONTRACT` §12 requires connections to be
+when the server record is created, because `SUMMARY.md` §8 requires connections to be
 made to a `SocketAddr`. This changes *when* a DNS failure surfaces, not whether it does.
 
 ### 10.9 The transport order is TCP, websocket, UDP — not websocket, TCP, UDP
