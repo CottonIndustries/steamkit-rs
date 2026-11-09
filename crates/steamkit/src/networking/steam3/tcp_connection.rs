@@ -48,6 +48,7 @@ struct TcpInner {
     current_end_point: Mutex<Option<SocketAddr>>,
     local_ip: Mutex<Option<IpAddr>>,
     cancel: Mutex<Option<CancellationToken>>,
+    io_timeout: Mutex<Duration>,
     disconnect_notified: AtomicBool,
 }
 
@@ -61,6 +62,7 @@ impl TcpConnection {
                 current_end_point: Mutex::new(None),
                 local_ip: Mutex::new(None),
                 cancel: Mutex::new(None),
+                io_timeout: Mutex::new(Duration::from_secs(5)),
                 disconnect_notified: AtomicBool::new(false),
             }),
         }
@@ -116,6 +118,7 @@ impl IConnection for TcpConnection {
 
         *lock(&self.inner.current_end_point) = Some(end_point);
         *lock(&self.inner.local_ip) = local_ip;
+        *lock(&self.inner.io_timeout) = timeout;
 
         let token = CancellationToken::new();
         *lock(&self.inner.cancel) = Some(token.clone());
@@ -136,8 +139,9 @@ impl IConnection for TcpConnection {
 
         let inner = self.inner.clone();
         let events = self.events.clone();
+        let io_timeout = timeout;
         tokio::spawn(async move {
-            tcp_net_loop(read_half, token, end_point, events, inner).await;
+            tcp_net_loop(read_half, token, end_point, io_timeout, events, inner).await;
         });
 
         Ok(())
@@ -168,23 +172,32 @@ impl IConnection for TcpConnection {
             return Ok(());
         };
 
-        let mut header = [0u8; 8];
-        header[..4].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        header[4..].copy_from_slice(&MAGIC.to_le_bytes());
+        let timeout_duration = *lock(&self.inner.io_timeout);
 
-        let buffers = [std::io::IoSlice::new(&header), std::io::IoSlice::new(&data)];
-        let written = writer.write_vectored(&buffers).await?;
+        let write = async {
+            let mut header = [0u8; 8];
+            header[..4].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            header[4..].copy_from_slice(&MAGIC.to_le_bytes());
 
-        if written < header.len() {
-            writer.write_all(&header[written..]).await?;
-            writer.write_all(&data).await?;
-        } else if written < header.len() + data.len() {
-            writer.write_all(&data[written - header.len()..]).await?;
+            let buffers = [std::io::IoSlice::new(&header), std::io::IoSlice::new(&data)];
+            let written = writer.write_vectored(&buffers).await?;
+
+            if written < header.len() {
+                writer.write_all(&header[written..]).await?;
+                writer.write_all(&data).await?;
+            } else if written < header.len() + data.len() {
+                writer.write_all(&data[written - header.len()..]).await?;
+            }
+
+            writer.flush().await?;
+
+            Ok::<(), SteamError>(())
+        };
+
+        match tokio::time::timeout(timeout_duration, write).await {
+            Ok(result) => result,
+            Err(_) => Err(SteamError::Timeout(timeout_duration)),
         }
-
-        writer.flush().await?;
-
-        Ok(())
     }
 
     fn local_ip(&self) -> Option<IpAddr> {
@@ -214,21 +227,21 @@ async fn tcp_net_loop(
     mut reader: OwnedReadHalf,
     token: CancellationToken,
     end_point: SocketAddr,
+    io_timeout: Duration,
     events: ConnectionEventSenders,
     inner: Arc<TcpInner>,
 ) {
     loop {
-        let mut length_bytes = [0u8; 4];
-        if read_exact_or_cancel(&mut reader, &mut length_bytes, &token).await.is_err() {
+        let mut header = [0u8; 8];
+        if read_exact_timed(&mut reader, &mut header, &token, io_timeout, false)
+            .await
+            .is_err()
+        {
             break;
         }
-        let packet_len = u32::from_le_bytes(length_bytes);
 
-        let mut magic_bytes = [0u8; 4];
-        if read_exact_or_cancel(&mut reader, &mut magic_bytes, &token).await.is_err() {
-            break;
-        }
-        let magic = u32::from_le_bytes(magic_bytes);
+        let packet_len = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+        let magic = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
         if magic != MAGIC {
             tracing::debug!("TcpConnection: Got a packet with invalid magic!");
@@ -241,7 +254,10 @@ async fn tcp_net_loop(
         }
 
         let mut payload = vec![0u8; packet_len as usize];
-        if read_exact_or_cancel(&mut reader, &mut payload, &token).await.is_err() {
+        if read_exact_timed(&mut reader, &mut payload, &token, io_timeout, true)
+            .await
+            .is_err()
+        {
             break;
         }
 
@@ -256,16 +272,47 @@ async fn tcp_net_loop(
     }
 }
 
-async fn read_exact_or_cancel(
+/// Reads exactly `buffer.len()` bytes. The first read waits indefinitely, like
+/// the C# `Socket.Poll` loop; every following read gets `timeout`, like
+/// `Socket.ReceiveTimeout`.
+async fn read_exact_timed(
     reader: &mut OwnedReadHalf,
     buffer: &mut [u8],
     token: &CancellationToken,
+    timeout: Duration,
+    timeout_first: bool,
 ) -> Result<(), ()> {
-    tokio::select! {
-        biased;
-        _ = token.cancelled() => Err(()),
-        result = reader.read_exact(buffer) => result.map(|_| ()).map_err(|_| ()),
+    let mut filled = 0;
+
+    while filled < buffer.len() {
+        let read = reader.read(&mut buffer[filled..]);
+
+        let result = if filled == 0 && !timeout_first {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return Err(()),
+                result = read => result,
+            }
+        } else {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return Err(()),
+                result = tokio::time::timeout(timeout, read) => match result {
+                    Ok(result) => result,
+                    Err(_) => return Err(()),
+                },
+            }
+        };
+
+        let read = result.map_err(|_| ())?;
+        if read == 0 {
+            return Err(());
+        }
+
+        filled += read;
     }
+
+    Ok(())
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

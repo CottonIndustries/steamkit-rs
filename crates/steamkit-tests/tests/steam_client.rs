@@ -182,9 +182,15 @@ fn get_next_job_id_sets_process_id_to_zero() {
 
 #[test]
 fn get_next_job_id_fills_process_start_time() {
-    // The job id's start time comes from SystemTime::now() when the client is
-    // created, not from the OS process start time (std has no portable way to
-    // get that), so there's nothing reliable to compare against here.
+    // The job id's start time is captured once per process, the first time a
+    // client is built; std has no portable way to read the real process start
+    // time, so there's nothing reliable to compare against here.
+}
+
+#[test]
+#[should_panic(expected = "identifier must not be empty")]
+fn an_empty_identifier_is_rejected() {
+    let _ = SteamClient::with_identifier("");
 }
 
 #[test]

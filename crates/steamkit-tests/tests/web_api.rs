@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -14,7 +15,7 @@ use steamkit::error::SteamError;
 use steamkit::steam::steam_client::configuration::i_steam_configuration_builder::ISteamConfigurationBuilder;
 use steamkit::steam::steam_client::configuration::steam_configuration::SteamConfiguration;
 use steamkit::steam::webapi::steam_configuration_web_api_extensions::get_async_web_api_interface;
-use steamkit::steam::webapi::web_api::{web_api_args, AsyncInterface, WebApiValue};
+use steamkit::steam::webapi::web_api::{web_api_args, AsyncInterface, WebApiValue, WebAPI};
 use steamkit_protos::steam::CMsgClientHello;
 
 /// Parses a value from its textual form.
@@ -383,6 +384,33 @@ async fn uses_args_as_query_string_params() {
 }
 
 #[tokio::test]
+async fn uses_args_as_form_data_for_non_get_method() {
+    let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
+    let iface = interface_for(&server);
+
+    let args = web_api_args([("f", "foo".into()), ("b", "bar".into())]);
+
+    if let Err(error) = iface
+        .call_with_method(reqwest::Method::PUT, "PerformFooOperation", 2, &args)
+        .await
+    {
+        panic!("the call must succeed, got: {error}");
+    }
+
+    let request = server.next_request().await;
+
+    assert_eq!("PUT", request.method);
+    assert_eq!("/IFooService/PerformFooOperation/v2/", request.path);
+
+    let values = parse_query(&request.body);
+
+    assert_eq!(3usize, values.len());
+    assert_eq!(Some("foo"), lookup(&values, "f"));
+    assert_eq!(Some("bar"), lookup(&values, "b"));
+    assert_eq!(Some("vdf"), lookup(&values, "format"));
+}
+
+#[tokio::test]
 async fn supports_null_args_dictionary() {
     let mut server = FakeWebApi::start("HTTP/1.1 200 OK").await;
     let iface = interface_for(&server);
@@ -604,4 +632,18 @@ async fn does_not_produce_empty_query_parameter() {
 
         assert_eq!(Some("foo"), lookup(&values, "f"));
     }
+}
+
+#[test]
+fn web_api_has_default_timeout() {
+    let interface = WebAPI::get_interface("ISteamWhatever", "");
+
+    assert_eq!(Duration::from_secs(100), interface.timeout());
+}
+
+#[test]
+fn web_api_async_has_default_timeout() {
+    let interface = WebAPI::get_async_interface("ISteamWhatever", "");
+
+    assert_eq!(Duration::from_secs(100), interface.timeout());
 }

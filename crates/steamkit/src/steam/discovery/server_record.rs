@@ -224,7 +224,7 @@ impl ServerRecord {
     ) -> Result<Self, SteamError> {
         const DEFAULT_PORT: u16 = 443;
 
-        let (host, port) = match address.rfind(':') {
+        let (host, port) = match address.find(':') {
             Some(index) => {
                 let host = &address[..index];
                 let port = &address[index + 1..];

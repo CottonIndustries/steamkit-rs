@@ -2,11 +2,13 @@
 
 A Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .NET library for talking to the Steam network.
 
+**Complete port of SteamKit2 4.0.0-Beta.1** - every public type, sample and test file, with no known behavioural gaps.
+
 The package is `steamkit-rs` (the `steamkit` name was taken on crates.io), but the library is called `steamkit`:
 
 ```toml
 [dependencies]
-steamkit-rs = "0.1"
+steamkit-rs = "1.0.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -45,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Logon result: {:?}", callback.result());
     }));
 
-    client.connect(None).await?;
+    client.connect(None)?;
 
     for _ in 0..10 {
         client.run_wait_all_callbacks(Duration::from_secs(1)).await;

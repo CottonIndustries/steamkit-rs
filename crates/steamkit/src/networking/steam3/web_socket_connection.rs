@@ -82,6 +82,14 @@ impl WebSocketConnection {
         connection
     }
 
+    /// Like [`new`](Self::new), for a connection to the given host name. The
+    /// host name is kept because it's the TLS server name.
+    pub fn new_for_host(factory: Arc<dyn WebSocketFactory>, host: impl Into<String>) -> Self {
+        let mut connection = Self::new(factory);
+        connection.host = Some(host.into());
+        connection
+    }
+
     /// Subscribes to the `NetMsgReceived` event.
     pub fn subscribe_net_msg_received(&self) -> broadcast::Receiver<NetMsgEventArgs> {
         self.events.subscribe_net_msg_received()

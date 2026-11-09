@@ -10,9 +10,14 @@
 //!   first, so that doesn't matter here.
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
+use async_trait::async_trait;
+use steamkit::error::SteamError;
 use steamkit::networking::steam3::protocol_type::ProtocolTypes;
+use steamkit::steam::discovery::i_server_list_provider::IServerListProvider;
 use steamkit::steam::discovery::server_record::ServerRecord;
 use steamkit::steam::discovery::smart_cm_server_list::{ServerQuality, SmartCMServerList};
 use steamkit::steam::steam_client::configuration::i_steam_configuration_builder::ISteamConfigurationBuilder;
@@ -44,7 +49,7 @@ async fn websocket_server(host: &str, port: u16) -> ServerRecord {
 
 /// Replaces the list and writes it to the provider.
 async fn replace_list(list: &SmartCMServerList, endpoint_list: Vec<ServerRecord>) {
-    let result = list.replace_list(endpoint_list, true, None).await;
+    let result = list.replace_list(endpoint_list, true);
     assert!(result.is_ok(), "ReplaceList should succeed: {result:?}");
 }
 
@@ -402,4 +407,74 @@ async fn try_mark_returns_false_if_server_not_in_list() {
     let not_in_list = socket_server([127, 0, 0, 1], 27016);
     let marked = try_mark(&list, &not_in_list, record.protocol_types(), ServerQuality::Good);
     assert!(!marked);
+}
+
+/// A provider that counts how often it is asked for the list.
+struct CountingProvider {
+    fetches: AtomicUsize,
+    servers: Vec<ServerRecord>,
+}
+
+#[async_trait]
+impl IServerListProvider for CountingProvider {
+    async fn last_server_list_refresh(&self) -> Result<SystemTime, SteamError> {
+        Ok(SystemTime::UNIX_EPOCH)
+    }
+
+    async fn fetch_server_list(&self) -> Result<Vec<ServerRecord>, SteamError> {
+        self.fetches.fetch_add(1, Ordering::SeqCst);
+        Ok(self.servers.clone())
+    }
+
+    async fn update_server_list(&self, _endpoints: Vec<ServerRecord>) -> Result<(), SteamError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn an_empty_successful_resolve_is_not_retried() {
+    let provider = Arc::new(CountingProvider {
+        fetches: AtomicUsize::new(0),
+        servers: Vec::new(),
+    });
+    let list = Arc::new(SmartCMServerList::with_provider(provider.clone(), false));
+
+    assert!(list.get_all_end_points().is_empty());
+    assert!(list.get_all_end_points().is_empty());
+    assert_eq!(
+        1,
+        provider.fetches.load(Ordering::SeqCst),
+        "a successful empty resolve must be cached, like the completed C# task"
+    );
+
+    list.force_refresh_server_list();
+
+    for _ in 0..200 {
+        if provider.fetches.load(Ordering::SeqCst) == 2 {
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    assert_eq!(
+        2,
+        provider.fetches.load(Ordering::SeqCst),
+        "a forced refresh must run again"
+    );
+}
+
+#[tokio::test]
+async fn marking_bad_matches_the_host_case_sensitively() {
+    let list = server_list();
+    let exact = ServerRecord::create_server("Example.com", 443, ProtocolTypes::WEB_SOCKET);
+    let other_case = ServerRecord::create_server("example.com", 443, ProtocolTypes::WEB_SOCKET);
+
+    replace_list(&list, vec![exact.clone()]).await;
+
+    assert!(
+        !list.try_mark(&other_case, ProtocolTypes::WEB_SOCKET, ServerQuality::Bad),
+        "the C# compares host names with Ordinal, so the case must matter"
+    );
+    assert!(list.try_mark(&exact, ProtocolTypes::WEB_SOCKET, ServerQuality::Bad));
 }

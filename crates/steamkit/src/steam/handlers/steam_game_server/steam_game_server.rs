@@ -35,8 +35,8 @@ pub struct LogOnDetails {
 pub struct StatusDetails {
     /// The app id this game server is serving.
     pub app_id: u32,
-    /// The server's basic state, as flags.
-    pub server_flags: EServerFlags,
+    /// The server's basic state, as an `EServerFlags` bit mask.
+    pub server_flags: u32,
     /// The directory the game data is in.
     pub game_directory: Option<String>,
     /// The IP address the game server listens on.
@@ -53,7 +53,7 @@ impl Default for StatusDetails {
     fn default() -> Self {
         Self {
             app_id: 0,
-            server_flags: EServerFlags::None,
+            server_flags: EServerFlags::None.value() as u32,
             game_directory: None,
             address: None,
             port: 0,
@@ -219,7 +219,7 @@ impl SteamGameServer {
         let mut status = ClientMsgProtobuf::<CMsgGsServerType>::new(EMsg::GSServerType);
 
         status.body.app_id_served = Some(details.app_id);
-        status.body.flags = Some(details.server_flags.value() as u32);
+        status.body.flags = Some(details.server_flags);
         status.body.game_dir = details.game_directory.clone();
         status.body.game_port = Some(details.port);
         status.body.game_query_port = Some(details.query_port);

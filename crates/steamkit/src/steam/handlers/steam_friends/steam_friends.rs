@@ -418,11 +418,11 @@ impl SteamFriends {
     pub fn request_friend_info(
         &self,
         steam_id_list: &[SteamID],
-        requested_info: Option<EClientPersonaStateFlag>,
+        requested_info: Option<u32>,
     ) -> SteamResult<()> {
         let client = self.client()?;
 
-        let requested_info = requested_info.map(|flag| flag as u32).unwrap_or_else(|| {
+        let requested_info = requested_info.unwrap_or_else(|| {
             client
                 .configuration()
                 .default_persona_state_flags_mask()
@@ -446,7 +446,7 @@ impl SteamFriends {
     pub fn request_friend_info_for_steam_id(
         &self,
         steam_id: SteamID,
-        requested_info: Option<EClientPersonaStateFlag>,
+        requested_info: Option<u32>,
     ) -> SteamResult<()> {
         self.request_friend_info(&[steam_id], requested_info)
     }
@@ -668,13 +668,6 @@ impl SteamFriends {
         let body = &per_state.body;
 
         let flags = body.status_flags.unwrap_or_default();
-        let status_flags = EClientPersonaStateFlag::from_value(flags as i32).unwrap_or_else(|| {
-            EClientPersonaStateFlag::ALL
-                .iter()
-                .copied()
-                .find(|flag| flags & (flag.value() as u32) != 0)
-                .unwrap_or(EClientPersonaStateFlag::Status)
-        });
 
         for friend in &body.friends {
             let friend_id = SteamID::from_id(friend.friendid.unwrap_or_default());
@@ -712,7 +705,7 @@ impl SteamFriends {
                 });
             }
 
-            let callback = PersonaStateCallback::new(friend, status_flags);
+            let callback = PersonaStateCallback::new(friend, flags);
             client.post_callback(Box::new(callback));
         }
 

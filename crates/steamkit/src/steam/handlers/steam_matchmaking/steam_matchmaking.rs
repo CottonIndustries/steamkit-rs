@@ -49,6 +49,23 @@ enum LobbyManipulationRequest {
     SetLobbyOwner(CMsgClientMmsSetLobbyOwner),
 }
 
+struct ManipulationGuard<'a> {
+    requests: &'a DashMap<JobID, LobbyManipulationRequest>,
+    job_id: JobID,
+}
+
+impl<'a> ManipulationGuard<'a> {
+    fn new(requests: &'a DashMap<JobID, LobbyManipulationRequest>, job_id: JobID) -> Self {
+        Self { requests, job_id }
+    }
+}
+
+impl Drop for ManipulationGuard<'_> {
+    fn drop(&mut self) {
+        self.requests.remove(&self.job_id);
+    }
+}
+
 /// Creates, joins and looks up lobbies.
 pub struct SteamMatchmaking {
     client: Weak<SteamClient>,
@@ -136,6 +153,8 @@ impl SteamMatchmaking {
             return Err(error);
         }
 
+        let _guard = ManipulationGuard::new(&self.lobby_manipulation_requests, job_id);
+
         self.finish_manipulation(job_id, job.wait().await)
     }
 
@@ -180,6 +199,8 @@ impl SteamMatchmaking {
             return Err(error);
         }
 
+        let _guard = ManipulationGuard::new(&self.lobby_manipulation_requests, job_id);
+
         self.finish_manipulation(job_id, job.wait().await)
     }
 
@@ -222,6 +243,8 @@ impl SteamMatchmaking {
             return Err(error);
         }
 
+        let _guard = ManipulationGuard::new(&self.lobby_manipulation_requests, job_id);
+
         self.finish_manipulation(job_id, job.wait().await)
     }
 
@@ -258,6 +281,8 @@ impl SteamMatchmaking {
             self.lobby_manipulation_requests.remove(&job_id);
             return Err(error);
         }
+
+        let _guard = ManipulationGuard::new(&self.lobby_manipulation_requests, job_id);
 
         self.finish_manipulation(job_id, job.wait().await)
     }

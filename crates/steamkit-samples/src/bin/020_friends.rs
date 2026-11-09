@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

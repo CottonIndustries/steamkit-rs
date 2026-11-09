@@ -182,7 +182,7 @@ mod dota_client {
             println!("Connecting to Steam...");
 
             // begin the connection to steam
-            let _ = self.client.connect(None).await;
+            let _ = self.client.connect(None);
         }
 
         /// Waits for the results of the match request.

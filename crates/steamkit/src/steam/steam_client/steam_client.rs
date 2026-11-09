@@ -40,7 +40,9 @@ use crate::steam::handlers::steam_user_stats::steam_user_stats::SteamUserStats;
 use crate::steam::handlers::steam_workshop::steam_workshop::SteamWorkshop;
 use crate::steam::steam_client::async_job_manager::AsyncJobManager;
 use crate::steam::steam_client::callback_mgr::callback_msg::CallbackMsg;
-use crate::steam::steam_client::callback_mgr::callback_mgr::{CallbackManager, SubscriptionId};
+use crate::steam::steam_client::callback_mgr::callback_mgr::{
+    CallbackManager, SubscriptionGuard, SubscriptionId,
+};
 use crate::steam::steam_client::callbacks::{ConnectedCallback, DisconnectedCallback};
 use crate::steam::steam_client::configuration::steam_configuration::SteamConfiguration;
 use crate::types::job_id::{AsyncJob, JobID};
@@ -139,11 +141,10 @@ impl SteamClient {
         identifier: impl Into<String>,
     ) -> Arc<SteamClient> {
         let identifier = identifier.into();
-        let identifier = if identifier.is_empty() {
-            random_identifier()
-        } else {
-            identifier
-        };
+        assert!(
+            !identifier.is_empty(),
+            "identifier must not be empty"
+        );
 
         // Start gathering machine info now so it's (hopefully) ready by the
         // time we log on.
@@ -169,6 +170,14 @@ impl SteamClient {
         });
 
         add_default_handlers(&client);
+
+        // The callback manager creates unified services on demand, the way the
+        // C# one does, so it needs a way back to the handler.
+        if let Some(unified) = client.get_handler::<SteamUnifiedMessages>() {
+            client
+                .callback_manager
+                .set_unified_messages(Arc::downgrade(&unified));
+        }
 
         client
     }
@@ -204,7 +213,9 @@ impl SteamClient {
     }
 
     /// The endpoint we're connected to.
-    pub fn current_end_point(&self) -> Option<std::net::SocketAddr> {
+    pub fn current_end_point(
+        &self,
+    ) -> Option<crate::steam::discovery::server_record::EndPoint> {
         self.cm.current_end_point()
     }
 
@@ -282,8 +293,6 @@ impl SteamClient {
     pub fn set_expect_disconnection(&self, expect: bool) {
         self.cm.set_expect_disconnection(expect);
     }
-
-    /// Sets the factory that creates this client's connections.
 
     /// The underlying CM client.
     pub fn cm_client(&self) -> &Arc<CMClient> {
@@ -425,11 +434,17 @@ impl SteamClient {
     pub fn post_callback(&self, msg: Box<dyn CallbackMsg>) {
         let job_id = msg.job_id();
 
-        // The job manager clones what it needs, so the queue keeps the original.
-        self.job_manager.try_complete_job(job_id, &*msg);
-
-        self.callback_queue.lock().push_back(msg);
+        let mut queue = self.callback_queue.lock();
+        queue.push_back(msg);
         self.callback_notify.notify_one();
+
+        // C# queues the callback before completing the job, so a waiter that
+        // wakes up can already see it.
+        let callback = queue.back().expect("the callback was just pushed");
+
+        if self.job_manager.try_complete_job(job_id, &**callback) {
+            self.cm.request_disconnect();
+        }
     }
 
     /// Posts a callback of a known type.
@@ -454,7 +469,7 @@ impl SteamClient {
     /// Waits for one callback and runs it.
     pub async fn run_wait_callbacks(&self) -> Result<(), SteamError> {
         let callback = self.wait_for_callback().await?;
-        self.callback_manager.dispatch(callback);
+        self.callback_manager.dispatch_async(callback).await;
         Ok(())
     }
 
@@ -463,7 +478,7 @@ impl SteamClient {
     pub async fn run_wait_callbacks_timeout(&self, timeout: Duration) -> bool {
         match self.wait_for_callback_timeout(timeout).await {
             Some(callback) => {
-                self.callback_manager.dispatch(callback);
+                self.callback_manager.dispatch_async(callback).await;
                 true
             }
             None => false,
@@ -476,7 +491,9 @@ impl SteamClient {
             return;
         }
 
-        while self.run_callbacks() {}
+        while let Some(callback) = self.get_callback() {
+            self.callback_manager.dispatch_async(callback).await;
+        }
     }
 
     /// Subscribes `callback_func` to callbacks of type `T`.
@@ -485,6 +502,18 @@ impl SteamClient {
         T: CallbackMsg + 'static,
     {
         self.callback_manager.subscribe(callback_func)
+    }
+
+    /// Subscribes like [`subscribe`](Self::subscribe), but returns a guard that
+    /// unsubscribes when it goes out of scope, like a C# `using`.
+    pub fn subscribe_guarded<T>(
+        &self,
+        callback_func: Box<dyn Fn(&T) + Send + Sync>,
+    ) -> SubscriptionGuard<'_>
+    where
+        T: CallbackMsg + 'static,
+    {
+        self.callback_manager.subscribe_guarded::<T>(callback_func)
     }
 
     /// Subscribes `callback_func` to callbacks of type `T` for one job.
@@ -529,11 +558,31 @@ impl SteamClient {
     /// Connects to a CM server; if `cm_server` is `None`, the next one from the
     /// server list is used.
     ///
-    /// A logged-on session that the server closes is moved to another server
-    /// automatically. Any other disconnect is posted as a `DisconnectedCallback`,
-    /// and it's up to you to call this again.
-    pub async fn connect(&self, cm_server: Option<ServerRecord>) -> Result<(), SteamError> {
-        self.cm.connect(cm_server).await
+    /// Any disconnect is posted as a `DisconnectedCallback`, and it's up to you
+    /// to call this again.
+    pub fn connect(self: &Arc<Self>, cm_server: Option<ServerRecord>) -> Result<(), SteamError> {
+        if self.cm.is_connected() {
+            return Err(SteamError::InvalidArgument(
+                "a connection is already in progress".to_string(),
+            ));
+        }
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return Err(SteamError::Connection(
+                "connect needs a Tokio runtime".to_string(),
+            ));
+        };
+
+        let client = Arc::clone(self);
+
+        handle.spawn(async move {
+            if let Err(error) = client.cm.connect(cm_server).await {
+                client.log_debug("SteamClient", &format!("Failed to connect: {error}"));
+                client.cm.on_client_disconnected(false).await;
+            }
+        });
+
+        Ok(())
     }
 
     /// Disconnects.
@@ -549,6 +598,12 @@ impl SteamClient {
     /// Writes a line to the debug log.
     pub fn log_debug(&self, category: &str, message: &str) {
         self.cm.log_debug(category, message);
+    }
+
+    /// Writes a line to the debug log, filling `{0}`, `{1}`, ... in `message`
+    /// from `args`, like the C# `LogDebug(category, message, params object[])`.
+    pub fn log_debug_args(&self, category: &str, message: &str, args: &[&str]) {
+        self.cm.log_debug_args(category, message, args);
     }
 
     /// Feeds a packet into the client as if it came from the connection, so
@@ -578,6 +633,11 @@ impl SteamClient {
                 self.cm.disconnect_with(false).await;
                 return false;
             }
+        }
+
+        if self.cm.take_disconnect_request() {
+            self.cm.disconnect_with(false).await;
+            return false;
         }
 
         true
@@ -632,6 +692,34 @@ fn random_identifier() -> String {
 }
 
 fn capture_process_start_time() -> u32 {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    (now.as_secs().saturating_sub(GLOBAL_ID_EPOCH_SECONDS) as u32) & 0x3FFF_FFFF
+    static PROCESS_START_TIME: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+    *PROCESS_START_TIME.get_or_init(|| {
+        let seconds = process_start_unix_seconds().unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        });
+
+        (seconds.saturating_sub(GLOBAL_ID_EPOCH_SECONDS) as u32) & 0x3FFF_FFFF
+    })
+}
+
+#[cfg(windows)]
+fn process_start_unix_seconds() -> Option<u64> {
+    let script = format!(
+        "([DateTimeOffset](Get-Process -Id {}).StartTime).ToUnixTimeSeconds()",
+        std::process::id()
+    );
+
+    crate::util::win32_helpers::run_powershell(&script)
+        .ok()?
+        .parse()
+        .ok()
+}
+
+#[cfg(not(windows))]
+fn process_start_unix_seconds() -> Option<u64> {
+    None
 }

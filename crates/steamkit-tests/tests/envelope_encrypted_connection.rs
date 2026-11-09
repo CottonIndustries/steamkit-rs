@@ -298,15 +298,22 @@ async fn messages_are_sent_in_the_clear_before_and_encrypted_after_the_handshake
 }
 
 #[tokio::test]
-async fn an_encrypted_packet_that_does_not_decrypt_is_dropped() {
+async fn an_encrypted_packet_that_does_not_decrypt_disconnects() {
     let mut fixture = fixture().await;
     handshake(&mut fixture).await;
 
     fixture.inner.receive(vec![0u8; 48]);
     fixture.inner.receive(vec![0u8; 7]);
 
-    assert_no_event(&mut fixture.events).await;
-    assert!(fixture.inner.disconnect_calls().is_empty());
+    eventually("the inner connection was disconnected", || {
+        !fixture.inner.disconnect_calls().is_empty()
+    })
+    .await;
+
+    assert_eq!(
+        ConnectionEvent::Disconnected(DisconnectedEventArgs::new(false)),
+        next(&mut fixture.events).await
+    );
 }
 
 #[tokio::test]

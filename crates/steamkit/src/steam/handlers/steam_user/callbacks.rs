@@ -74,6 +74,7 @@ pub struct LoggedOnCallback {
     public_ip: Option<IpAddr>,
     server_time: DateTime<Utc>,
     account_flags: EAccountFlags,
+    account_flags_raw: u32,
     client_steam_id: Option<SteamID>,
     email_domain: Option<String>,
     cell_id: u32,
@@ -117,6 +118,7 @@ impl LoggedOnCallback {
                     resp.account_flags.unwrap_or_default() as i32
                 )
                 .unwrap_or(EAccountFlags::NormalUser),
+                account_flags_raw: resp.account_flags.unwrap_or_default(),
                 client_steam_id: Some(SteamID::from_id(
                     resp.client_supplied_steamid.unwrap_or_default(),
                 )),
@@ -146,6 +148,7 @@ impl LoggedOnCallback {
                 public_ip: Some(IpAddr::V4(Ipv4Addr::from(resp.ip_public.to_be_bytes()))),
                 server_time: date_time_from_unix_time(u64::from(resp.server_real_time)),
                 account_flags: EAccountFlags::NormalUser,
+                account_flags_raw: 0,
                 client_steam_id: Some(SteamID::from_id(resp.client_supplied_steam_id)),
                 email_domain: None,
                 cell_id: 0,
@@ -172,6 +175,7 @@ impl LoggedOnCallback {
             public_ip: None,
             server_time: date_time_from_unix_time(0),
             account_flags: EAccountFlags::NormalUser,
+            account_flags_raw: 0,
             client_steam_id: None,
             email_domain: None,
             cell_id: 0,
@@ -219,6 +223,11 @@ impl LoggedOnCallback {
     /// The account flags assigned by the server.
     pub fn account_flags(&self) -> EAccountFlags {
         self.account_flags
+    }
+
+    /// The raw account flag bits, which can hold a combination.
+    pub fn account_flags_raw(&self) -> u32 {
+        self.account_flags_raw
     }
 
     /// The client steam ID.
@@ -391,10 +400,11 @@ impl CallbackMsg for SessionTokenCallback {
 #[derive(Clone, Debug)]
 pub struct AccountInfoCallback {
     job_id: JobID,
-    persona_name: String,
+    persona_name: Option<String>,
     country: String,
     count_authed_computers: i32,
     account_flags: EAccountFlags,
+    account_flags_raw: u32,
 }
 
 impl AccountInfoCallback {
@@ -405,17 +415,18 @@ impl AccountInfoCallback {
 
         Ok(Self {
             job_id: JobID::new(),
-            persona_name: msg.persona_name.clone().unwrap_or_default(),
+            persona_name: msg.persona_name.clone(),
             country: msg.ip_country.clone().unwrap_or_default(),
             count_authed_computers: msg.count_authed_computers.unwrap_or_default(),
             account_flags: EAccountFlags::from_value(msg.account_flags.unwrap_or_default() as i32)
                 .unwrap_or(EAccountFlags::NormalUser),
+            account_flags_raw: msg.account_flags.unwrap_or_default(),
         })
     }
 
-    /// The last persona name used by this account.
-    pub fn persona_name(&self) -> &str {
-        &self.persona_name
+    /// The last persona name used by this account, if the server sent one.
+    pub fn persona_name(&self) -> Option<&str> {
+        self.persona_name.as_deref()
     }
 
     /// The country this account is connected from.
@@ -431,6 +442,11 @@ impl AccountInfoCallback {
     /// The account flags for this account.
     pub fn account_flags(&self) -> EAccountFlags {
         self.account_flags
+    }
+
+    /// The raw account flag bits, which can hold a combination.
+    pub fn account_flags_raw(&self) -> u32 {
+        self.account_flags_raw
     }
 }
 

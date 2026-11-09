@@ -84,7 +84,8 @@ impl SteamCloud {
             .send_message::<CCloudGetFileDetailsRequest, CCloudGetFileDetailsResponse>(
                 "GetFileDetails",
                 request,
-            )
+            )?
+            .wait()
             .await?;
 
         Ok(UGCDetailsCallback::from_response(
@@ -111,7 +112,8 @@ impl SteamCloud {
             .send_message::<CCloudGetSingleFileInfoRequest, CCloudGetSingleFileInfoResponse>(
                 "GetSingleFileInfo",
                 request,
-            )
+            )?
+            .wait()
             .await?;
 
         Ok(SingleFileInfoCallback::from_response(
@@ -131,7 +133,8 @@ impl SteamCloud {
         };
 
         let response = service
-            .send_message::<CCloudShareFileRequest, CCloudShareFileResponse>("ShareFile", request)
+            .send_message::<CCloudShareFileRequest, CCloudShareFileResponse>("ShareFile", request)?
+            .wait()
             .await?;
 
         Ok(ShareFileCallback::from_response(

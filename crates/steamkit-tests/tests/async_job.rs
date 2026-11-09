@@ -5,8 +5,9 @@
 //! jobs through [`AsyncJobManager::start_job`] and
 //! [`AsyncJobManager::start_job_multiple`], which only register them.
 //!
-//! The job manager has no per-job timeout and uses [`MANAGER_JOB_TIMEOUT`]
-//! for every job, so the timeout tests have to wait that long.
+//! A job's timeout defaults to [`MANAGER_JOB_TIMEOUT`]; `AsyncJob::set_timeout`
+//! changes the deadline the manager enforces, so most timeout tests still wait
+//! the default.
 
 use std::any::Any;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,7 +18,7 @@ use steamkit::steam::steam_client::callback_mgr::callback_msg::{CallbackMsg, Cal
 use steamkit::steam::steam_client::steam_client::SteamClient;
 use steamkit::types::job_id::{AsyncJob, AsyncJobMultiple, JobID};
 
-/// The timeout the job manager gives every job. It can't be changed per job.
+/// The default timeout of a job.
 const MANAGER_JOB_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The timeout of a job that received a heartbeat.
@@ -214,6 +215,26 @@ async fn async_job_clears_on_timeout() {
     match task.wait().await {
         Err(SteamError::Timeout(_)) => {}
         other => panic!("the job must be cancelled by the timeout, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn set_timeout_changes_the_manager_deadline() {
+    let client = SteamClient::new();
+
+    let mut job = client
+        .job_manager()
+        .start_job::<TestCallback>(JobID::from_value(124));
+    job.set_timeout(Duration::from_millis(50));
+
+    let task = job.to_task();
+
+    tokio::time::sleep(Duration::from_millis(70)).await;
+    client.job_manager().cancel_timed_out_jobs();
+
+    match task.wait().await {
+        Err(SteamError::Timeout(_)) => {}
+        other => panic!("the job must use the timeout set on the handle, got: {other:?}"),
     }
 }
 

@@ -36,7 +36,7 @@ pub fn default_web_api_base_address() -> reqwest::Url {
 /// The `User-Agent` sent with every HTTP request, including the CM WebSocket
 /// upgrade.
 pub fn default_user_agent() -> String {
-    format!("SteamKit/{}", env!("CARGO_PKG_VERSION"))
+    String::from("SteamKit/4.0.0")
 }
 
 /// The default HTTP client factory.

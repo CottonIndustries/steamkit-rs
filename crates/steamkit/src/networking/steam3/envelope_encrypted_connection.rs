@@ -278,6 +278,7 @@ async fn handle_net_msg_received(shared: &Arc<EnvelopeShared>, args: NetMsgEvent
                 tracing::debug!(
                     "EnvelopeEncryptedConnection: Unable to decrypt incoming packet: {err}"
                 );
+                shared.inner.disconnect(false).await;
             }
         }
 

@@ -17,6 +17,11 @@ pub trait IClientMsg: Send + Sync {
     /// Whether this client message is protobuf backed.
     fn is_proto(&self) -> bool;
 
+    /// Whether this client message uses the extended header.
+    fn is_extended(&self) -> bool {
+        false
+    }
+
     /// The network message type of this client message.
     fn msg_type(&self) -> EMsg;
 
@@ -211,7 +216,7 @@ where
     }
 
     fn target_job_id(&self) -> JobID {
-        JobID::from_value(self.header.proto.jobid_target.unwrap_or(u64::MAX))
+        JobID::from_value(self.header.proto.jobid_target.unwrap_or(0))
     }
 
     fn set_target_job_id(&mut self, id: JobID) {
@@ -219,7 +224,7 @@ where
     }
 
     fn source_job_id(&self) -> JobID {
-        JobID::from_value(self.header.proto.jobid_source.unwrap_or(u64::MAX))
+        JobID::from_value(self.header.proto.jobid_source.unwrap_or(0))
     }
 
     fn set_source_job_id(&mut self, id: JobID) {
@@ -341,6 +346,10 @@ where
         false
     }
 
+    fn is_extended(&self) -> bool {
+        true
+    }
+
     fn msg_type(&self) -> EMsg {
         self.header.msg
     }
@@ -407,18 +416,20 @@ impl<TBody> Msg<TBody>
 where
     TBody: SteamSerializableDeserialize + ISteamSerializableMessage,
 {
-    /// Creates a new message of the given type.
-    pub fn new(e_msg: EMsg) -> Self {
-        Self::with_payload_reserve(e_msg, 0)
+    /// Creates a new message; the EMsg comes from the body type, like the C#
+    /// `new Msg<TBody>()`.
+    pub fn new() -> Self {
+        Self::with_payload_reserve(0)
     }
 
     /// Like [`new`](Self::new), but reserves `payload_reserve` bytes for the payload.
-    pub fn with_payload_reserve(e_msg: EMsg, payload_reserve: usize) -> Self {
+    pub fn with_payload_reserve(payload_reserve: usize) -> Self {
+        let body = TBody::default();
         let mut header = MsgHdr::default();
-        header.set_emsg(e_msg);
+        header.set_emsg(body.get_emsg());
         Msg {
             header,
-            body: TBody::default(),
+            body,
             payload: MsgBase::new(payload_reserve),
             session_id: 0,
             steam_id: None,
@@ -426,8 +437,8 @@ where
     }
 
     /// Creates a reply to `reply_to`, targeting its source job.
-    pub fn reply(e_msg: EMsg, reply_to: &dyn IClientMsg) -> Self {
-        let mut msg = Self::new(e_msg);
+    pub fn reply(reply_to: &dyn IClientMsg) -> Self {
+        let mut msg = Self::new();
         msg.set_target_job_id(reply_to.source_job_id());
         msg
     }
@@ -483,6 +494,15 @@ where
     /// The mutable payload buffer of this message.
     pub fn payload_mut(&mut self) -> &mut MsgBase {
         &mut self.payload
+    }
+}
+
+impl<TBody> Default for Msg<TBody>
+where
+    TBody: SteamSerializableDeserialize + ISteamSerializableMessage,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 

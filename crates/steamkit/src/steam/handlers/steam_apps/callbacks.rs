@@ -1359,14 +1359,10 @@ impl CheckAppBetaPasswordCallback {
                 continue;
             };
 
-            match crate::util::utils::decode_hex_string(password.betapassword.as_deref()) {
-                Ok(Some(decoded)) => {
-                    beta_passwords.insert(name.to_string(), decoded);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!("failed to decode the beta password of '{name}': {error}");
-                }
+            if let Some(decoded) =
+                crate::util::utils::decode_hex_string(password.betapassword.as_deref())?
+            {
+                beta_passwords.insert(name.to_string(), decoded);
             }
         }
 

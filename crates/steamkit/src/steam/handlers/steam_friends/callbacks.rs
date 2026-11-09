@@ -150,6 +150,17 @@ fn persona_state_flag_from_bits(bits: u32) -> EPersonaStateFlag {
     })
 }
 
+/// The most specific client persona state flag in a raw bit set.
+fn client_persona_state_flag_from_bits(bits: u32) -> EClientPersonaStateFlag {
+    EClientPersonaStateFlag::from_value(bits as i32).unwrap_or_else(|| {
+        EClientPersonaStateFlag::ALL
+            .iter()
+            .copied()
+            .find(|flag| bits & (flag.value() as u32) != 0)
+            .unwrap_or(EClientPersonaStateFlag::Status)
+    })
+}
+
 /// The most specific account flag in a raw bit set (the generated enum can't
 /// hold a combination).
 fn account_flags_from_bits(bits: u32) -> EAccountFlags {
@@ -234,9 +245,11 @@ impl ChatMemberInfo {
 pub struct PersonaStateCallback {
     job_id: JobID,
     status_flags: EClientPersonaStateFlag,
+    status_flags_raw: u32,
     friend_id: SteamID,
     state: EPersonaState,
     state_flags: EPersonaStateFlag,
+    state_flags_raw: u32,
     game_app_id: u32,
     game_id: GameID,
     game_name: String,
@@ -258,17 +271,19 @@ impl PersonaStateCallback {
     /// Builds the callback from a persona state entry sent by the server.
     pub(crate) fn new(
         friend: &c_msg_client_persona_state::Friend,
-        status_flags: EClientPersonaStateFlag,
+        status_flags: u32,
     ) -> Self {
         Self {
             job_id: JobID::new(),
-            status_flags,
+            status_flags: client_persona_state_flag_from_bits(status_flags),
+            status_flags_raw: status_flags,
             friend_id: SteamID::from_id(friend.friendid.unwrap_or_default()),
             state: EPersonaState::from_value(friend.persona_state.unwrap_or_default() as i32)
                 .unwrap_or(EPersonaState::Offline),
             state_flags: persona_state_flag_from_bits(
                 friend.persona_state_flags.unwrap_or_default(),
             ),
+            state_flags_raw: friend.persona_state_flags.unwrap_or_default(),
             game_app_id: friend.game_played_app_id.unwrap_or_default(),
             game_id: GameID::from_value(friend.gameid.unwrap_or_default()),
             game_name: friend.game_name.clone().unwrap_or_default(),
@@ -299,6 +314,11 @@ impl PersonaStateCallback {
         self.status_flags
     }
 
+    /// The raw status flag bits, which can hold a combination.
+    pub fn status_flags_raw(&self) -> u32 {
+        self.status_flags_raw
+    }
+
     /// The friend ID.
     pub fn friend_id(&self) -> SteamID {
         self.friend_id
@@ -312,6 +332,11 @@ impl PersonaStateCallback {
     /// The state flags.
     pub fn state_flags(&self) -> EPersonaStateFlag {
         self.state_flags
+    }
+
+    /// The raw state flag bits, which can hold a combination.
+    pub fn state_flags_raw(&self) -> u32 {
+        self.state_flags_raw
     }
 
     /// The game app ID.
@@ -414,6 +439,7 @@ pub struct ClanStateCallback {
     job_id: JobID,
     clan_id: SteamID,
     account_flags: EAccountFlags,
+    account_flags_raw: u32,
     chat_room_private: bool,
     clan_name: Option<String>,
     avatar_hash: Option<Vec<u8>>,
@@ -501,6 +527,7 @@ impl ClanStateCallback {
             job_id: JobID::new(),
             clan_id: SteamID::from_id(msg.steamid_clan.unwrap_or_default()),
             account_flags: account_flags_from_bits(msg.clan_account_flags.unwrap_or_default()),
+            account_flags_raw: msg.clan_account_flags.unwrap_or_default(),
             chat_room_private: msg.chat_room_private.unwrap_or_default(),
             clan_name,
             avatar_hash,
@@ -521,6 +548,11 @@ impl ClanStateCallback {
     /// The account flags.
     pub fn account_flags(&self) -> EAccountFlags {
         self.account_flags
+    }
+
+    /// The raw account flag bits, which can hold a combination.
+    pub fn account_flags_raw(&self) -> u32 {
+        self.account_flags_raw
     }
 
     /// The privacy of the chat room.

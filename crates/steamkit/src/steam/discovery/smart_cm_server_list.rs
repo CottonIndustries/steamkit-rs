@@ -13,13 +13,16 @@
 //! * [`SmartCMServerList::with_provider`] doesn't use the directory at all.
 
 use std::fmt;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock as StdRwLock};
 use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
-use parking_lot::RwLock;
-use tokio::sync::Mutex;
+use futures::FutureExt;
+use parking_lot::{Mutex, RwLock};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::SteamError;
@@ -168,13 +171,23 @@ struct ServerListState {
     servers_last_refresh: Option<SystemTime>,
 }
 
+/// The single in-flight resolve, mirroring the C# `listTask` field.
+#[derive(Debug, Default)]
+struct FetchState {
+    in_flight: bool,
+    generation: u64,
+    last_outcome: Option<Result<(), String>>,
+}
+
 /// Smart list of CM servers.
 pub struct SmartCMServerList {
     provider: Arc<dyn IServerListProvider>,
     allow_directory_fetch: bool,
     directory_loader: Option<ServerListDirectoryLoader>,
     state: RwLock<ServerListState>,
-    resolve_lock: Mutex<()>,
+    fetch_state: Mutex<FetchState>,
+    fetch_generation: watch::Sender<u64>,
+    fetch_generation_rx: watch::Receiver<u64>,
     server_list_before_refresh_time_span: AtomicU64,
     bad_connection_memory_time_span: AtomicU64,
 }
@@ -186,6 +199,34 @@ impl fmt::Debug for SmartCMServerList {
             .field("has_directory_loader", &self.directory_loader.is_some())
             .finish()
     }
+}
+
+/// Runs `future` to completion on a thread of its own.
+///
+/// The C# `WaitForServersFetched` blocks the calling thread; this is the Rust
+/// equivalent. The future always runs on a fresh runtime in a scoped thread,
+/// never on the caller's runtime: blocking a runtime thread would starve any
+/// task on that runtime, which is how the previous version could deadlock on a
+/// current-thread runtime. Nothing in the resolve path holds a lock across an
+/// await, so a thread of its own is enough in every case.
+fn block_on_future<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("a current-thread runtime can be built");
+
+                runtime.block_on(future)
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 impl SmartCMServerList {
@@ -217,12 +258,27 @@ impl SmartCMServerList {
         provider: Arc<dyn IServerListProvider>,
         allow_directory_fetch: bool,
     ) -> Self {
+        let directory_loader = if allow_directory_fetch {
+            Some(steam_directory_loader(
+                default_web_api_base_address(),
+                0,
+                None,
+                None,
+            ))
+        } else {
+            None
+        };
+
+        let (fetch_generation, fetch_generation_rx) = watch::channel(0u64);
+
         SmartCMServerList {
             provider,
             allow_directory_fetch,
-            directory_loader: None,
+            directory_loader,
             state: RwLock::new(ServerListState::default()),
-            resolve_lock: Mutex::new(()),
+            fetch_state: Mutex::new(FetchState::default()),
+            fetch_generation,
+            fetch_generation_rx,
             server_list_before_refresh_time_span: AtomicU64::new(
                 Duration::from_secs(7 * 24 * 60 * 60).as_millis() as u64,
             ),
@@ -328,13 +384,7 @@ impl SmartCMServerList {
             .unwrap_or(SystemTime::UNIX_EPOCH);
 
         let mut state = self.state.write();
-        for server in state.servers.iter_mut() {
-            if let Some(last_bad) = server.last_bad_connection_time_utc {
-                if last_bad < cutoff {
-                    server.last_bad_connection_time_utc = None;
-                }
-            }
-        }
+        reset_old_scores_locked(&mut state, cutoff);
     }
 
     /// Resets the state of all servers.
@@ -345,11 +395,21 @@ impl SmartCMServerList {
         }
     }
 
-    /// Replaces the list.
-    ///
-    /// * `write_provider` - also store the new list in the server list provider.
-    /// * `servers_time` - when the list was last updated; now if `None`.
-    pub async fn replace_list(
+    /// Replaces the list, like the C# `ReplaceList`. Blocks while the provider
+    /// is updated when `write_provider` is set.
+    pub fn replace_list(
+        &self,
+        endpoint_list: Vec<ServerRecord>,
+        write_provider: bool,
+    ) -> Result<(), SteamError> {
+        block_on_future(self.replace_list_internal(
+            endpoint_list,
+            write_provider,
+            Some(SystemTime::now()),
+        ))
+    }
+
+    async fn replace_list_internal(
         &self,
         endpoint_list: Vec<ServerRecord>,
         write_provider: bool,
@@ -402,10 +462,7 @@ impl SmartCMServerList {
                         && server.protocol.has(protocol_types)
                 }
                 // A failure marks every endpoint of the host.
-                ServerQuality::Bad => {
-                    server.record.get_host() == host
-                        || server.record.endpoint() == record.endpoint()
-                }
+                ServerQuality::Bad => server.record.get_host() == host,
             })
             .map(|(index, _)| index)
             .collect();
@@ -444,27 +501,38 @@ impl SmartCMServerList {
     pub async fn get_next_server_candidate_async(
         &self,
         supported_protocol_types: ProtocolTypes,
+    ) -> Result<Option<ServerRecord>, SteamError> {
+        self.start_fetching_servers().await?;
+
+        Ok(self.get_next_server_candidate_internal(supported_protocol_types))
+    }
+
+    /// The next server to try. Fetches the list first if it hasn't been
+    /// fetched yet, like the C# `WaitForServersFetched`; `None` if the fetch
+    /// failed or there's no candidate.
+    ///
+    /// This blocks the calling thread. Inside async code prefer
+    /// [`SmartCMServerList::get_next_server_candidate_async`].
+    pub fn get_next_server_candidate(
+        &self,
+        supported_protocol_types: ProtocolTypes,
     ) -> Option<ServerRecord> {
-        if let Err(error) = self.start_fetching_servers().await {
-            tracing::debug!("Failed to retrieve server list: {error}");
+        if !self.wait_for_servers_fetched() {
             return None;
         }
 
         self.get_next_server_candidate_internal(supported_protocol_types)
     }
 
-    /// The next server to try, from the list as it is now (doesn't fetch).
-    pub fn get_next_server_candidate(
-        &self,
-        supported_protocol_types: ProtocolTypes,
-    ) -> Option<ServerRecord> {
-        let state = self.state.read();
-
-        best_candidate(&state.servers, supported_protocol_types)
-    }
-
-    /// All servers in the list.
+    /// All servers in the list. Fetches the list first if it hasn't been
+    /// fetched yet, like the C# `WaitForServersFetched`.
+    ///
+    /// This blocks the calling thread.
     pub fn get_all_end_points(&self) -> Vec<ServerRecord> {
+        if !self.wait_for_servers_fetched() {
+            return Vec::new();
+        }
+
         let state = self.state.read();
         let mut end_points: Vec<ServerRecord> = Vec::with_capacity(state.servers.len());
 
@@ -477,12 +545,24 @@ impl SmartCMServerList {
         end_points
     }
 
-    /// Refreshes the server list: from the Web API first if directory fetches
-    /// are allowed, then from the provider.
-    pub async fn force_refresh_server_list(&self) -> Result<(), SteamError> {
-        let _guard = self.resolve_lock.lock().await;
+    /// Starts a refresh, like the C# `ForceRefreshServerList`; the caller does
+    /// not wait for it.
+    pub fn force_refresh_server_list(self: &Arc<Self>) {
+        let list = Arc::clone(self);
 
-        self.resolve_server_list(true).await
+        let refresh = async move {
+            let result = list.resolve_server_list(true).await;
+            let _ = list.finish_fetch(result);
+        };
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(refresh);
+            }
+            Err(_) => {
+                let _ = block_on_future(refresh);
+            }
+        }
     }
 
     /// Picks the candidate from the current list.
@@ -490,14 +570,42 @@ impl SmartCMServerList {
         &self,
         supported_protocol_types: ProtocolTypes,
     ) -> Option<ServerRecord> {
-        self.reset_old_scores();
+        let cutoff = SystemTime::now()
+            .checked_sub(self.bad_connection_memory_time_span())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
 
-        let state = self.state.read();
+        let mut state = self.state.write();
+        reset_old_scores_locked(&mut state, cutoff);
 
         best_candidate(&state.servers, supported_protocol_types)
     }
 
-    /// Fetches the server list if needed.
+    /// Blocks the current thread until the server list has been fetched, like
+    /// the C# `WaitForServersFetched`. Returns `false` if the fetch failed.
+    fn wait_for_servers_fetched(&self) -> bool {
+        let span = self.server_list_before_refresh_time_span();
+
+        if self.list_is_fresh(span) || self.resolve_is_done_and_empty() {
+            return true;
+        }
+
+        if self.fetch_state.lock().in_flight && on_current_thread_runtime() {
+            panic!(
+                "SmartCMServerList: a blocking accessor cannot wait for an in-flight fetch on a current-thread runtime; use the async accessor or call this outside the runtime"
+            );
+        }
+
+        match block_on_future(self.start_fetching_servers()) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::debug!("Failed to retrieve server list: {error}");
+                false
+            }
+        }
+    }
+
+    /// Fetches the server list if needed, or waits for the fetch already
+    /// running, like the C# `StartFetchingServers`.
     async fn start_fetching_servers(&self) -> Result<(), SteamError> {
         let span = self.server_list_before_refresh_time_span();
 
@@ -505,16 +613,80 @@ impl SmartCMServerList {
             return Ok(());
         }
 
-        let _guard = self.resolve_lock.lock().await;
+        let mut wait_for = None;
+        {
+            let mut fetch_state = self.fetch_state.lock();
 
-        if self.list_is_fresh(span) {
-            return Ok(());
+            if fetch_state.in_flight {
+                wait_for = Some(fetch_state.generation);
+            } else if self.list_is_empty() && matches!(fetch_state.last_outcome, Some(Ok(()))) {
+                // C# keeps the completed task: an empty successful resolve is
+                // not retried until it is forced.
+                return Ok(());
+            } else {
+                fetch_state.in_flight = true;
+            }
         }
 
-        // The list is there but stale, so force a refresh.
-        let force_refresh = !self.state.read().servers.is_empty();
+        if let Some(generation) = wait_for {
+            let mut receiver = self.fetch_generation_rx.clone();
 
-        self.resolve_server_list(force_refresh).await
+            while *receiver.borrow() == generation {
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+
+            let fetch_state = self.fetch_state.lock();
+            return match &fetch_state.last_outcome {
+                Some(Ok(())) => Ok(()),
+                Some(Err(message)) => Err(SteamError::Connection(message.clone())),
+                None => Ok(()),
+            };
+        }
+
+        let force_refresh = !self.list_is_empty();
+
+        let result = match AssertUnwindSafe(self.resolve_server_list(force_refresh))
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(SteamError::Connection(
+                "server list provider panicked".to_string(),
+            )),
+        };
+
+        self.finish_fetch(result)
+    }
+
+    fn finish_fetch(&self, result: Result<(), SteamError>) -> Result<(), SteamError> {
+        let generation = {
+            let mut fetch_state = self.fetch_state.lock();
+            fetch_state.in_flight = false;
+            fetch_state.generation += 1;
+            fetch_state.last_outcome = Some(match &result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            });
+            fetch_state.generation
+        };
+
+        let _ = self.fetch_generation.send(generation);
+
+        result
+    }
+
+    fn resolve_is_done_and_empty(&self) -> bool {
+        let fetch_state = self.fetch_state.lock();
+
+        !fetch_state.in_flight
+            && matches!(fetch_state.last_outcome, Some(Ok(())))
+            && self.list_is_empty()
+    }
+
+    fn list_is_empty(&self) -> bool {
+        self.state.read().servers.is_empty()
     }
 
     /// Whether the list is populated and fresh enough to use as-is.
@@ -536,7 +708,15 @@ impl SmartCMServerList {
     /// Resolves the server list from the Steam Directory, the provider or the
     /// fallback servers.
     async fn resolve_server_list(&self, mut force_refresh: bool) -> Result<(), SteamError> {
-        let provider_refresh_time = self.provider.last_server_list_refresh().await?;
+        // The C# property cannot fail; a provider that cannot report its
+        // refresh time is treated as stale rather than aborting the resolve.
+        let provider_refresh_time = match self.provider.last_server_list_refresh().await {
+            Ok(time) => time,
+            Err(error) => {
+                tracing::debug!("Failed to read the server list refresh time: {error}");
+                SystemTime::UNIX_EPOCH
+            }
+        };
         let span = self.server_list_before_refresh_time_span();
         let mut already_tried_directory_fetch = false;
 
@@ -564,7 +744,7 @@ impl SmartCMServerList {
                         "Resolved {} servers from SteamDirectory",
                         directory_list.len()
                     );
-                    self.replace_list(directory_list, true, Some(SystemTime::now()))
+                    self.replace_list_internal(directory_list, true, Some(SystemTime::now()))
                         .await?;
                     return Ok(());
                 }
@@ -580,7 +760,7 @@ impl SmartCMServerList {
         // The provider's list is fresh enough and not empty.
         if !server_list.is_empty() {
             tracing::debug!("Resolved {} servers from the provider", server_list.len());
-            self.replace_list(server_list, false, Some(provider_refresh_time))
+            self.replace_list_internal(server_list, false, Some(provider_refresh_time))
                 .await?;
             return Ok(());
         }
@@ -590,7 +770,7 @@ impl SmartCMServerList {
             tracing::debug!(
                 "Server list provider had no entries, and AllowDirectoryFetch is false"
             );
-            self.replace_list(Vec::new(), false, Some(SystemTime::UNIX_EPOCH))
+            self.replace_list_internal(Vec::new(), false, Some(SystemTime::UNIX_EPOCH))
                 .await?;
             return Ok(());
         }
@@ -607,7 +787,7 @@ impl SmartCMServerList {
                         "Resolved {} servers from SteamDirectory",
                         directory_list.len()
                     );
-                    self.replace_list(directory_list, true, Some(SystemTime::now()))
+                    self.replace_list_internal(directory_list, true, Some(SystemTime::now()))
                         .await?;
                     return Ok(());
                 }
@@ -624,10 +804,27 @@ impl SmartCMServerList {
             ServerRecord::create_dns_socket_server(&Self::default_server_netfilter())?,
         ];
 
-        self.replace_list(default_servers, false, Some(SystemTime::UNIX_EPOCH))
+        self.replace_list_internal(default_servers, false, Some(SystemTime::UNIX_EPOCH))
             .await?;
 
         Ok(())
+    }
+}
+
+fn on_current_thread_runtime() -> bool {
+    matches!(
+        tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()),
+        Ok(tokio::runtime::RuntimeFlavor::CurrentThread)
+    )
+}
+
+fn reset_old_scores_locked(state: &mut ServerListState, cutoff: SystemTime) {
+    for server in state.servers.iter_mut() {
+        if let Some(last_bad) = server.last_bad_connection_time_utc {
+            if last_bad < cutoff {
+                server.last_bad_connection_time_utc = None;
+            }
+        }
     }
 }
 

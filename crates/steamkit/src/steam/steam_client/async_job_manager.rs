@@ -119,7 +119,7 @@ struct JobEntry {
     type_id: TypeId,
     clone_callback: fn(&dyn CallbackMsg) -> Option<Box<dyn CallbackMsg>>,
     completer: Completer,
-    timeout: Mutex<Duration>,
+    timeout: Arc<Mutex<Duration>>,
     started: Instant,
     finish_condition: Mutex<Option<Arc<dyn Fn(&dyn CallbackMsg) -> bool + Send + Sync>>>,
     results: Mutex<Vec<Box<dyn CallbackMsg>>>,
@@ -129,13 +129,14 @@ impl JobEntry {
     fn new(
         type_id: TypeId,
         clone_callback: fn(&dyn CallbackMsg) -> Option<Box<dyn CallbackMsg>>,
+        timeout: Arc<Mutex<Duration>>,
         completer: Completer,
     ) -> Self {
         Self {
             type_id,
             clone_callback,
             completer,
-            timeout: Mutex::new(DEFAULT_JOB_TIMEOUT),
+            timeout,
             started: Instant::now(),
             finish_condition: Mutex::new(None),
             results: Mutex::new(Vec::new()),
@@ -226,10 +227,12 @@ impl AsyncJobManager {
     {
         let mut job = AsyncJob::<T>::new(job_id);
         let sender = job.take_sender();
+        let timeout = job.timeout_handle();
 
         let entry = Arc::new(JobEntry::new(
             TypeId::of::<T>(),
             clone_callback_of::<T>,
+            timeout,
             Completer::Single(Mutex::new(sender)),
         ));
 
@@ -276,6 +279,7 @@ impl AsyncJobManager {
 
         let mut job = AsyncJobMultiple::<T>::new(job_id, job_condition);
         let sender = job.take_sender();
+        let timeout = job.timeout_handle();
 
         let completer: MultiCompleter = Box::new(move |outcome| {
             let Some(sender) = sender else {
@@ -306,6 +310,7 @@ impl AsyncJobManager {
         let entry = Arc::new(JobEntry::new(
             TypeId::of::<T>(),
             clone_callback_of::<T>,
+            timeout,
             Completer::Multiple(Mutex::new(Some(completer))),
         ));
 
@@ -318,9 +323,9 @@ impl AsyncJobManager {
 
     /// Hands a callback to the job waiting for it. Ignored if no job with that
     /// id is tracked.
-    pub fn try_complete_job(&self, job_id: JobID, callback: &dyn CallbackMsg) {
+    pub fn try_complete_job(&self, job_id: JobID, callback: &dyn CallbackMsg) -> bool {
         let Some(entry) = self.inner.jobs.get(&job_id).map(|tracked| Arc::clone(tracked.value())) else {
-            return;
+            return false;
         };
 
         let finish_condition = entry.finish_condition.lock().clone();
@@ -333,7 +338,13 @@ impl AsyncJobManager {
                         callback.as_any().type_id(),
                         job_id.value()
                     )));
-                } else if let Some(copy) = (entry.clone_callback)(callback) {
+
+                    self.inner.jobs.remove(&job_id);
+
+                    return true;
+                }
+
+                if let Some(copy) = (entry.clone_callback)(callback) {
                     entry.completer.complete_single(copy);
                 }
 
@@ -355,6 +366,8 @@ impl AsyncJobManager {
                 }
             }
         }
+
+        false
     }
 
     /// Extends a job's timeout (Steam sent a heartbeat for it).

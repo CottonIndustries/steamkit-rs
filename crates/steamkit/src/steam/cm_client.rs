@@ -27,13 +27,14 @@ use crate::networking::steam3::protocol_type::ProtocolTypes;
 use crate::networking::steam3::tcp_connection::TcpConnection;
 use crate::networking::steam3::udp_connection::UdpConnection;
 use crate::networking::steam3::web_socket_connection::WebSocketConnection;
-use crate::steam::discovery::server_record::ServerRecord;
+use crate::networking::steam3::web_socket_context::ReqwestWebSocketFactory;
+use crate::steam::discovery::server_record::{EndPoint, ServerRecord};
 use crate::steam::discovery::smart_cm_server_list::{ServerQuality, SmartCMServerList};
 use crate::steam::steam_client::configuration::steam_configuration::{
-    default_user_agent, SteamConfiguration,
+    HttpClientPurpose, SteamConfiguration,
 };
 use crate::types::steam_id::SteamID;
-use crate::util::debug_log::DebugLog;
+use crate::util::debug_log::{format_with_args, DebugLog};
 use crate::util::debug_network_listener::IDebugNetworkListener;
 use crate::util::net_helpers::NetHelpers;
 use steamkit_protos::steam::{
@@ -96,12 +97,13 @@ fn default_connection_factory(
     let debug_network_listener = client.debug_network_listener();
 
     if protocol.has(ProtocolTypes::WEB_SOCKET) {
-        return Ok(Arc::new(
-            WebSocketConnection::new_tungstenite_for_host_with_user_agent(
-                record.get_host(),
-                default_user_agent(),
-            ),
-        ));
+        let http_client =
+            (client.configuration().http_client_factory())(HttpClientPurpose::CMWebSocket);
+
+        return Ok(Arc::new(WebSocketConnection::new_for_host(
+            Arc::new(ReqwestWebSocketFactory::new(http_client)),
+            record.get_host(),
+        )));
     }
 
     if protocol.has(ProtocolTypes::TCP) {
@@ -143,6 +145,7 @@ pub struct CMClient {
     connection_cancellation: RwLock<Option<CancellationToken>>,
     outbound: RwLock<Option<mpsc::UnboundedSender<Bytes>>>,
     expect_disconnection: AtomicBool,
+    disconnect_requested: AtomicBool,
     /// The record of the server the client is connected to, used to mark it
     /// good or bad. Kept because an unresolved record has no address.
     current_record: RwLock<Option<ServerRecord>>,
@@ -207,6 +210,7 @@ impl CMClient {
             connection_cancellation: RwLock::new(None),
             outbound: RwLock::new(None),
             expect_disconnection: AtomicBool::new(false),
+            disconnect_requested: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             announced_generation: AtomicU64::new(0),
             is_connected: AtomicBool::new(false),
@@ -243,9 +247,15 @@ impl CMClient {
         self.connection.read().as_ref().and_then(|connection| connection.local_ip())
     }
 
-    /// The endpoint we're connected to.
-    pub fn current_end_point(&self) -> Option<SocketAddr> {
-        self.connection.read().as_ref().and_then(|connection| connection.current_end_point())
+    /// The endpoint we're connected to, including the host name when the
+    /// server record was a host name.
+    pub fn current_end_point(&self) -> Option<EndPoint> {
+        self.connection.read().as_ref()?;
+
+        self.current_record
+            .read()
+            .as_ref()
+            .map(|record| record.endpoint().clone())
     }
 
     /// Our public IP address, known after a successful logon.
@@ -318,6 +328,17 @@ impl CMClient {
         self.expect_disconnection.store(expect, Ordering::SeqCst);
     }
 
+    /// Asks the client to drop the connection, like the C# callback-type
+    /// mismatch path.
+    pub fn request_disconnect(&self) {
+        self.disconnect_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Takes the pending disconnect request.
+    pub fn take_disconnect_request(&self) -> bool {
+        self.disconnect_requested.swap(false, Ordering::SeqCst)
+    }
+
     /// Writes a line to the debug log under `<client id>/<category>`, and emits
     /// a `tracing` event too.
     pub fn log_debug(&self, category: &str, message: &str) {
@@ -328,12 +349,16 @@ impl CMClient {
         DebugLog::write_line(&full_category, message);
     }
 
+    /// Writes a line to the debug log, filling `{0}`, `{1}`, ... in `message`
+    /// from `args`, like the C# `LogDebug(category, message, params object[])`.
+    pub fn log_debug_args(&self, category: &str, message: &str, args: &[&str]) {
+        self.log_debug(category, &format_with_args(message, args));
+    }
+
     /// Connects to a CM server; if `cm_server` is `None`, the next one from the
     /// server list is used.
     ///
-    /// A logged-on session that the server closes is moved to another server
-    /// automatically. Any other disconnect is reported, and it's up to you to
-    /// call this again.
+    /// Any disconnect is reported, and it's up to you to call this again.
     pub async fn connect(self: &Arc<Self>, cm_server: Option<ServerRecord>) -> Result<(), SteamError> {
         self.disconnect_with(true).await;
 
@@ -350,7 +375,7 @@ impl CMClient {
             None => {
                 self.servers
                     .get_next_server_candidate_async(self.configuration.protocol_types())
-                    .await
+                    .await?
             }
         };
 
@@ -385,8 +410,8 @@ impl CMClient {
         let session = match self.open_session(record, generation).await {
             Ok(session) => session,
             Err(error) => {
-                // No session, so a later `disconnect` has nothing to announce.
                 self.announced_generation.fetch_max(generation, Ordering::SeqCst);
+                self.on_client_disconnected(false).await;
                 return Err(error);
             }
         };
@@ -837,8 +862,8 @@ impl CMClient {
         if logon_result == EResult::OK {
             let header = response.proto_header();
 
-            *self.session_id.write() = header.client_sessionid;
-            *self.steam_id.write() = header.steamid.map(SteamID::from_id);
+            *self.session_id.write() = Some(header.client_sessionid.unwrap_or(0));
+            *self.steam_id.write() = Some(SteamID::from_id(header.steamid.unwrap_or(0)));
             *self.cell_id.write() = response.body().cell_id;
             *self.public_ip.write() = response
                 .body()
@@ -960,7 +985,7 @@ impl CMClient {
     fn restart_heart_beat(self: &Arc<Self>, delay: Duration) {
         self.stop_heart_beat();
 
-        let delay = if delay.is_zero() { Duration::from_secs(1) } else { delay };
+        let one_shot = delay.is_zero();
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -970,6 +995,18 @@ impl CMClient {
         let this = Arc::clone(self);
 
         let task = handle.spawn(async move {
+            if one_shot {
+                tokio::select! {
+                    _ = token.cancelled() => {}
+                    _ = tokio::time::sleep(Duration::ZERO) => {
+                        let request =
+                            ClientMsgProtobuf::<CMsgClientHeartBeat>::new(EMsg::ClientHeartBeat);
+                        let _ = this.send(&request);
+                    }
+                }
+                return;
+            }
+
             let mut interval = tokio::time::interval(delay);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1045,7 +1082,10 @@ fn stamp_identity(
     // The extended header: message type (4), header size (1), header version
     // (2), target job id (8), source job id (8), canary (1), SteamID (8) and
     // session id (4).
-    if bytes.len() >= EXTENDED_HEADER_SIZE && bytes[4] as usize == EXTENDED_HEADER_SIZE {
+    if msg.is_extended()
+        && bytes.len() >= EXTENDED_HEADER_SIZE
+        && bytes[4] as usize == EXTENDED_HEADER_SIZE
+    {
         if let Some(steam_id) = steam_id {
             bytes[EXTENDED_HEADER_STEAM_ID_OFFSET..EXTENDED_HEADER_STEAM_ID_OFFSET + 8]
                 .copy_from_slice(&steam_id.raw_u64().to_le_bytes());

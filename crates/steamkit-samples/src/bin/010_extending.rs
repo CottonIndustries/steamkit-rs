@@ -106,6 +106,7 @@ mod my_handler {
         }
 
         /// Some other useful function.
+        #[allow(dead_code)]
         pub fn do_something(&self) -> SteamResult<()> {
             self.client()?
                 .log_debug("MyHandler", "MyHandler.DoSomething was called");
@@ -189,7 +190,7 @@ async fn main() -> Result<()> {
     // get the steamuser handler, which is used for logging on after successfully connecting
     let steam_user = steam_client.get_required_handler::<SteamUser>()?;
     // now get an instance of our custom handler
-    let my_handler = steam_client.get_handler::<MyHandler>();
+    let _my_handler = steam_client.get_handler::<MyHandler>();
 
     let is_running = Arc::new(AtomicBool::new(true));
 
@@ -272,14 +273,10 @@ async fn main() -> Result<()> {
         }));
     }
 
-    if let Some(my_handler) = my_handler {
-        my_handler.do_something()?;
-    }
-
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

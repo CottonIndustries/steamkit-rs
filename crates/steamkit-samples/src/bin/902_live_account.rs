@@ -286,16 +286,17 @@ async fn download_file(
 /// Asks Steam something that needs a live, logged-on session.
 async fn probe_session(unified_messages: &SteamUnifiedMessages) -> Result<u32, String> {
     let request = CPlayerGetGameBadgeLevelsRequest { appid: Some(440) };
-    let response = tokio::time::timeout(
-        CHECK_TIMEOUT,
-        unified_messages.send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
+    let job = unified_messages
+        .send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
             "Player.GetGameBadgeLevels#1",
             request,
-        ),
-    )
-    .await
-    .map_err(|_| "timed out".to_string())?
-    .map_err(|error| error.to_string())?;
+        )
+        .map_err(|error| error.to_string())?;
+
+    let response = tokio::time::timeout(CHECK_TIMEOUT, job.wait())
+        .await
+        .map_err(|_| "timed out".to_string())?
+        .map_err(|error| error.to_string())?;
 
     if response.result() == EResult::OK {
         Ok(response.body().player_level.unwrap_or_default())
@@ -703,7 +704,7 @@ async fn main() -> Result<()> {
     };
 
     println!("Connecting to Steam...");
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     let mut report = Report::default();
 

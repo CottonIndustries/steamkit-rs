@@ -122,7 +122,6 @@ async fn on_logged_on(
             // we were lucky and Steam gave us the info we requested before failing
         } else {
             // bad luck
-            println!("Steam failed before it sent the product info of {app_id}.");
         }
     } else {
         // the request partially completed, but then we timed out. essentially the
@@ -133,7 +132,6 @@ async fn on_logged_on(
             // we were lucky and Steam gave us the info we requested before timing out
         } else {
             // bad luck
-            println!("Steam timed out before it sent the product info of {app_id}.");
         }
     }
 
@@ -273,7 +271,7 @@ async fn main() -> Result<()> {
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

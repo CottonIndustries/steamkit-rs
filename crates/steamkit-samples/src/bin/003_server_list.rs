@@ -121,13 +121,9 @@ async fn main() -> Result<()> {
             // Directory.
             let cell_id = callback.cell_id();
 
-            tokio::spawn(async move {
-                if let Err(error) =
-                    tokio::fs::write(CELL_ID_FILE, cell_id.to_string()).await
-                {
-                    eprintln!("Unable to write {CELL_ID_FILE}: {error}");
-                }
-            });
+            if let Err(error) = std::fs::write(CELL_ID_FILE, cell_id.to_string()) {
+                eprintln!("Unable to write {CELL_ID_FILE}: {error}");
+            }
 
             println!("Successfully logged on! Press Ctrl+C to log off...");
         }));
@@ -144,7 +140,7 @@ async fn main() -> Result<()> {
 
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
-                println!("Received Ctrl+C, disconnecting...");
+                println!("Received ControlC, disconnecting...");
                 let _ = steam_user.log_off();
             }
         });
@@ -153,7 +149,7 @@ async fn main() -> Result<()> {
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

@@ -26,7 +26,7 @@ where
     pub fn from_packet(packet_msg: &dyn IPacketMsg) -> SteamResult<Self> {
         let msg = ClientMsgProtobuf::<T>::from_packet(packet_msg)?;
 
-        let job_id = JobID::from_value(msg.header().proto.jobid_target.unwrap_or(u64::MAX));
+        let job_id = JobID::from_value(msg.header().proto.jobid_target.unwrap_or(0));
         let result = EResult::from_value(msg.header().proto.eresult.unwrap_or_default())
             .unwrap_or(EResult::Invalid);
 

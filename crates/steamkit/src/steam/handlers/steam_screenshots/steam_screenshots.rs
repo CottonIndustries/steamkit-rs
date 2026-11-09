@@ -63,10 +63,12 @@ impl Default for ScreenshotDetails {
             privacy: EUCMFilePrivacyState::Invalid,
             width: 0,
             height: 0,
-            // The Unix epoch, so `rtime32_created` is 0 ("not set").
-            creation_time: DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(|| {
-                DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::default(), Utc)
-            }),
+            // The C# default is `DateTime.MinValue`, whose negative Unix
+            // timestamp truncates to this `uint` value when sent.
+            creation_time: DateTime::<Utc>::from_timestamp(2_288_912_640, 0)
+                .unwrap_or_else(|| {
+                    DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::default(), Utc)
+                }),
             contains_spoilers: false,
         }
     }

@@ -138,7 +138,8 @@ impl SteamContent {
             .send_message::<
                 CContentServerDirectoryGetServersForSteamPipeRequest,
                 CContentServerDirectoryGetServersForSteamPipeResponse,
-            >("GetServersForSteamPipe", request)
+            >("GetServersForSteamPipe", request)?
+            .wait()
             .await?;
 
         Ok(ContentServerDirectoryService::convert_server_list(
@@ -187,7 +188,8 @@ impl SteamContent {
             .send_message::<
                 CContentServerDirectoryGetManifestRequestCodeRequest,
                 CContentServerDirectoryGetManifestRequestCodeResponse,
-            >("GetManifestRequestCode", request)
+            >("GetManifestRequestCode", request)?
+            .wait()
             .await?;
 
         Ok(response.body().manifest_request_code.unwrap_or_default())
@@ -213,7 +215,8 @@ impl SteamContent {
             .send_message::<
                 CContentServerDirectoryGetCdnAuthTokenRequest,
                 CContentServerDirectoryGetCdnAuthTokenResponse,
-            >("GetCDNAuthToken", request)
+            >("GetCDNAuthToken", request)?
+            .wait()
             .await?;
 
         Ok(CDNAuthToken::from_response(

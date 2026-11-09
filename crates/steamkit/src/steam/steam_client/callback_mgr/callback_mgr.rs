@@ -6,11 +6,19 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 
+use crate::error::SteamResult;
+
+use crate::steam::handlers::steam_unified_messages::callbacks::{
+    ServiceMethodNotification, ServiceMethodResponse,
+};
+use crate::steam::handlers::steam_unified_messages::steam_unified_messages::{
+    SteamUnifiedMessages, UnifiedService,
+};
 use crate::types::job_id::JobID;
 
 use super::callback_msg::CallbackMsg;
@@ -28,10 +36,33 @@ impl SubscriptionId {
     }
 }
 
+/// A subscription that unsubscribes when dropped, like a C# `using` scope.
+pub struct SubscriptionGuard<'a> {
+    manager: &'a CallbackManager,
+    id: SubscriptionId,
+}
+
+impl SubscriptionGuard<'_> {
+    /// The id of the subscription.
+    pub fn id(&self) -> SubscriptionId {
+        self.id
+    }
+}
+
+impl Drop for SubscriptionGuard<'_> {
+    fn drop(&mut self) {
+        self.manager.unsubscribe(self.id);
+    }
+}
+
 /// Routes callbacks to the functions subscribed to them.
 pub struct CallbackManager {
     subscriptions: RwLock<Vec<(SubscriptionId, Arc<CallbackSubscription>)>>,
     next_id: AtomicU64,
+    /// Set by [`SteamClient`](crate::steam::steam_client::steam_client::SteamClient)
+    /// so the `subscribe_service_*` methods can create the service, the way
+    /// the C# `CallbackManager` does.
+    unified_messages: OnceLock<Weak<SteamUnifiedMessages>>,
 }
 
 impl Default for CallbackManager {
@@ -54,7 +85,39 @@ impl CallbackManager {
         Self {
             subscriptions: RwLock::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            unified_messages: OnceLock::new(),
         }
+    }
+
+    /// Gives the manager a way back to the unified messages handler, so the
+    /// `subscribe_service_*` methods can create the service on demand.
+    pub(crate) fn set_unified_messages(&self, unified: Weak<SteamUnifiedMessages>) {
+        let _ = self.unified_messages.set(unified);
+    }
+
+    /// The unified messages handler, if one has been wired up.
+    fn unified_messages(&self) -> Option<Arc<SteamUnifiedMessages>> {
+        self.unified_messages.get()?.upgrade()
+    }
+
+    /// Creates `service_name` if it doesn't exist yet and runs `register` on
+    /// it. Does nothing when the manager has no unified messages handler,
+    /// which is the case for a manager built by hand.
+    fn ensure_service(
+        &self,
+        service_name: &str,
+        register: impl FnOnce(&UnifiedService),
+    ) -> SteamResult<()> {
+        let Some(unified) = self.unified_messages() else {
+            return Err(crate::error::SteamError::Connection(
+                "CallbackManager is not attached to a SteamClient".to_string(),
+            ));
+        };
+
+        let service = unified.create_service(service_name)?;
+        register(&service);
+
+        Ok(())
     }
 
     /// Subscribes `callback_func` to callbacks of type `T`.
@@ -63,6 +126,21 @@ impl CallbackManager {
         T: CallbackMsg + 'static,
     {
         self.register(Callback::new(callback_func, None).into_subscription())
+    }
+
+    /// Subscribes like [`subscribe`](Self::subscribe), but returns a guard that
+    /// unsubscribes when it goes out of scope, like a C# `using`.
+    pub fn subscribe_guarded<T>(
+        &self,
+        callback_func: Box<dyn Fn(&T) + Send + Sync>,
+    ) -> SubscriptionGuard<'_>
+    where
+        T: CallbackMsg + 'static,
+    {
+        SubscriptionGuard {
+            manager: self,
+            id: self.subscribe::<T>(callback_func),
+        }
     }
 
     /// Subscribes `callback_func` to callbacks of type `T` for one job.
@@ -93,43 +171,82 @@ impl CallbackManager {
         self.register(AsyncCallback::new(callback_func, Some(job_id)).into_subscription())
     }
 
-    /// Subscribes to the notifications of a unified service. Create the service
-    /// through the unified messages handler first.
-    pub fn subscribe_service_notification<T>(&self, callback_func: Box<dyn Fn(&T) + Send + Sync>) -> SubscriptionId
+    /// Subscribes to the notifications of a unified service, creating the
+    /// service first, like the C# `SubscribeServiceNotification`.
+    ///
+    /// `service_name` and `method` are the two halves of the
+    /// `Service.Method#Version` job name. The C# reads them off the `TService`
+    /// type; Rust has no runtime type objects, so they are passed explicitly.
+    pub fn subscribe_service_notification<B>(
+        &self,
+        service_name: &str,
+        method: &str,
+        callback_func: Box<dyn Fn(&ServiceMethodNotification<B>) + Send + Sync>,
+    ) -> SteamResult<SubscriptionId>
     where
-        T: CallbackMsg + 'static,
+        B: prost::Message + Default + Clone + 'static,
     {
-        self.register(Callback::new(callback_func, None).into_subscription())
+        self.ensure_service(service_name, |service| {
+            service.set_notification_type::<B>(method);
+        })?;
+
+        Ok(self.register(Callback::new(callback_func, None).into_subscription()))
     }
 
     /// Async version of [`CallbackManager::subscribe_service_notification`].
-    pub fn subscribe_service_notification_async<T>(
+    pub fn subscribe_service_notification_async<B>(
         &self,
-        callback_func: Box<dyn Fn(Arc<T>) -> BoxFuture<'static, ()> + Send + Sync>,
-    ) -> SubscriptionId
+        service_name: &str,
+        method: &str,
+        callback_func: Box<
+            dyn Fn(Arc<ServiceMethodNotification<B>>) -> BoxFuture<'static, ()> + Send + Sync,
+        >,
+    ) -> SteamResult<SubscriptionId>
     where
-        T: CallbackMsg + 'static,
+        B: prost::Message + Default + Clone + 'static,
     {
-        self.register(AsyncCallback::new(callback_func, None).into_subscription())
+        self.ensure_service(service_name, |service| {
+            service.set_notification_type::<B>(method);
+        })?;
+
+        Ok(self.register(AsyncCallback::new(callback_func, None).into_subscription()))
     }
 
-    /// Subscribes to the responses of a unified service.
-    pub fn subscribe_service_response<T>(&self, callback_func: Box<dyn Fn(&T) + Send + Sync>) -> SubscriptionId
+    /// Subscribes to the responses of a unified service, creating the service
+    /// first, like the C# `SubscribeServiceResponse`.
+    pub fn subscribe_service_response<B>(
+        &self,
+        service_name: &str,
+        method: &str,
+        callback_func: Box<dyn Fn(&ServiceMethodResponse<B>) + Send + Sync>,
+    ) -> SteamResult<SubscriptionId>
     where
-        T: CallbackMsg + 'static,
+        B: prost::Message + Default + Clone + 'static,
     {
-        self.register(Callback::new(callback_func, None).into_subscription())
+        self.ensure_service(service_name, |service| {
+            service.set_response_type::<B>(method);
+        })?;
+
+        Ok(self.register(Callback::new(callback_func, None).into_subscription()))
     }
 
     /// Async version of [`CallbackManager::subscribe_service_response`].
-    pub fn subscribe_service_response_async<T>(
+    pub fn subscribe_service_response_async<B>(
         &self,
-        callback_func: Box<dyn Fn(Arc<T>) -> BoxFuture<'static, ()> + Send + Sync>,
-    ) -> SubscriptionId
+        service_name: &str,
+        method: &str,
+        callback_func: Box<
+            dyn Fn(Arc<ServiceMethodResponse<B>>) -> BoxFuture<'static, ()> + Send + Sync,
+        >,
+    ) -> SteamResult<SubscriptionId>
     where
-        T: CallbackMsg + 'static,
+        B: prost::Message + Default + Clone + 'static,
     {
-        self.register(AsyncCallback::new(callback_func, None).into_subscription())
+        self.ensure_service(service_name, |service| {
+            service.set_response_type::<B>(method);
+        })?;
+
+        Ok(self.register(AsyncCallback::new(callback_func, None).into_subscription()))
     }
 
     /// Removes a subscription.
@@ -152,10 +269,9 @@ impl CallbackManager {
     /// Like [`CallbackManager::dispatch`], for an already shared callback.
     pub fn dispatch_arc(&self, msg: Arc<dyn CallbackMsg>) {
         let job_id = msg.job_id();
-        let type_id = msg.as_any().type_id();
 
         for (_, subscription) in self.snapshot() {
-            if !subscription.matches(type_id, job_id) {
+            if !subscription.matches(&*msg, job_id) {
                 continue;
             }
 
@@ -181,10 +297,9 @@ impl CallbackManager {
     /// Like [`CallbackManager::dispatch_async`], for an already shared callback.
     pub async fn dispatch_arc_async(&self, msg: Arc<dyn CallbackMsg>) {
         let job_id = msg.job_id();
-        let type_id = msg.as_any().type_id();
 
         for (_, subscription) in self.snapshot() {
-            if !subscription.matches(type_id, job_id) {
+            if !subscription.matches(&*msg, job_id) {
                 continue;
             }
 

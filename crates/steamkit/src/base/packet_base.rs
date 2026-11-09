@@ -90,11 +90,11 @@ impl IPacketMsg for PacketClientMsgProtobuf {
     }
 
     fn target_job_id(&self) -> JobID {
-        JobID::from_value(self.header.proto.jobid_target.unwrap_or(u64::MAX))
+        JobID::from_value(self.header.proto.jobid_target.unwrap_or(0))
     }
 
     fn source_job_id(&self) -> JobID {
-        JobID::from_value(self.header.proto.jobid_source.unwrap_or(u64::MAX))
+        JobID::from_value(self.header.proto.jobid_source.unwrap_or(0))
     }
 
     fn get_data(&self) -> &[u8] {

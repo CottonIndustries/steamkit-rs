@@ -6,8 +6,10 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
 use crate::error::SteamError;
@@ -126,7 +128,7 @@ pub struct AnyCallback;
 /// An awaitable [`JobID`]. `AsyncJob` is untyped, `AsyncJob<T>` typed.
 pub struct AsyncJob<T = AnyCallback> {
     job_id: JobID,
-    timeout: Duration,
+    timeout: Arc<Mutex<Duration>>,
     job_start: Instant,
     sender: Option<oneshot::Sender<JobResult>>,
     receiver: JobReceiver,
@@ -140,7 +142,7 @@ impl<T> AsyncJob<T> {
         let (sender, receiver) = oneshot::channel();
         AsyncJob {
             job_id,
-            timeout: DEFAULT_TIMEOUT,
+            timeout: Arc::new(Mutex::new(DEFAULT_TIMEOUT)),
             job_start: Instant::now(),
             sender: Some(sender),
             receiver: JobReceiver { receiver },
@@ -155,22 +157,27 @@ impl<T> AsyncJob<T> {
 
     /// How long until this job times out and is cancelled. 10 seconds by default.
     pub fn timeout(&self) -> Duration {
-        self.timeout
+        *self.timeout.lock()
     }
 
     /// Sets how long until this job times out and is cancelled.
     pub fn set_timeout(&mut self, timeout: Duration) {
-        self.timeout = timeout;
+        *self.timeout.lock() = timeout;
     }
 
     /// Whether this job has timed out.
     pub fn is_timedout(&self) -> bool {
-        self.job_start.elapsed() >= self.timeout
+        self.job_start.elapsed() >= *self.timeout.lock()
     }
 
     /// Records a heartbeat and extends the job's timeout.
     pub fn heartbeat(&mut self) {
-        self.timeout += HEARTBEAT_TIMEOUT_EXTENSION;
+        *self.timeout.lock() += HEARTBEAT_TIMEOUT_EXTENSION;
+    }
+
+    /// The timeout shared with the job manager's entry.
+    pub(crate) fn timeout_handle(&self) -> Arc<Mutex<Duration>> {
+        Arc::clone(&self.timeout)
     }
 
     /// Adds a callback to the job's results. For the untyped job, one callback
@@ -189,7 +196,7 @@ impl<T> AsyncJob<T> {
             let error = if due_to_remote_failure {
                 SteamError::JobFailed
             } else {
-                SteamError::Timeout(self.timeout)
+                SteamError::Timeout(*self.timeout.lock())
             };
             let _ = sender.send(Err(error));
         }
@@ -300,7 +307,7 @@ pub struct ResultSet<T> {
 /// An awaitable [`JobID`] that can get several callbacks.
 pub struct AsyncJobMultiple<T: CallbackMsg> {
     job_id: JobID,
-    timeout: Duration,
+    timeout: Arc<Mutex<Duration>>,
     job_start: Instant,
     sender: Option<oneshot::Sender<Result<ResultSet<T>, SteamError>>>,
     receiver: MultiJobReceiver<T>,
@@ -319,7 +326,7 @@ impl<T: CallbackMsg> AsyncJobMultiple<T> {
         let (sender, receiver) = oneshot::channel();
         AsyncJobMultiple {
             job_id,
-            timeout: DEFAULT_TIMEOUT,
+            timeout: Arc::new(Mutex::new(DEFAULT_TIMEOUT)),
             job_start: Instant::now(),
             sender: Some(sender),
             receiver: MultiJobReceiver {
@@ -339,22 +346,26 @@ impl<T: CallbackMsg> AsyncJobMultiple<T> {
 
     /// The timeout of this job.
     pub fn timeout(&self) -> Duration {
-        self.timeout
+        *self.timeout.lock()
     }
 
     /// Sets the timeout of this job.
     pub fn set_timeout(&mut self, timeout: Duration) {
-        self.timeout = timeout;
+        *self.timeout.lock() = timeout;
     }
 
     /// Whether this job has timed out.
     pub fn is_timedout(&self) -> bool {
-        self.job_start.elapsed() >= self.timeout
+        self.job_start.elapsed() >= *self.timeout.lock()
     }
 
     /// Records a heartbeat and extends the job's timeout.
     pub fn heartbeat(&mut self) {
-        self.timeout += HEARTBEAT_TIMEOUT_EXTENSION;
+        *self.timeout.lock() += HEARTBEAT_TIMEOUT_EXTENSION;
+    }
+
+    pub(crate) fn timeout_handle(&self) -> Arc<Mutex<Duration>> {
+        Arc::clone(&self.timeout)
     }
 
     /// The results collected so far.
@@ -409,7 +420,7 @@ impl<T: CallbackMsg> AsyncJobMultiple<T> {
             let error = if due_to_remote_failure {
                 SteamError::JobFailed
             } else {
-                SteamError::Timeout(self.timeout)
+                SteamError::Timeout(*self.timeout.lock())
             };
 
             if let Some(sender) = self.sender.take() {

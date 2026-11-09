@@ -234,10 +234,15 @@ async fn run_checks(
     let request = CPlayerGetGameBadgeLevelsRequest { appid: Some(440) };
     let badge_levels = tokio::time::timeout(
         CHECK_TIMEOUT,
-        unified_messages.send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
-            "Player.GetGameBadgeLevels#1",
-            request,
-        ),
+        async {
+            let job = unified_messages
+                .send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
+                    "Player.GetGameBadgeLevels#1",
+                    request,
+                )?;
+
+            job.wait().await
+        },
     )
     .await;
     match badge_levels {
@@ -386,7 +391,7 @@ async fn main() -> Result<()> {
     };
 
     println!("Connecting to Steam...");
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     let mut report = Report::default();
 

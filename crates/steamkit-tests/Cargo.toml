@@ -32,6 +32,7 @@ flate2 = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 
 [[bench]]
 name = "hot_paths"

@@ -3,14 +3,18 @@
 //! prost doesn't generate service clients, so [`UnifiedService`] is a generic
 //! client: you register the response and notification body types of the
 //! methods you use with [`UnifiedService::set_response_type`] and
-//! [`UnifiedService::set_notification_type`].
+//! [`UnifiedService::set_notification_type`]. `subscribe_service_*` and
+//! `send_message` do that for you.
 //!
-//! Responses are matched to the job waiting for them, so you can call a
-//! service method without creating a service first.
+//! Responses are decoded by the service they belong to, like the C# typed
+//! `UnifiedService`; a response for a service that was never created is
+//! dropped, and the job waiting for it times out.
 
+use std::any::TypeId;
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 
 use crate::base::client_msg::{ClientMsgProtobuf, IClientMsg};
@@ -24,7 +28,7 @@ use crate::error::{SteamError, SteamResult};
 use crate::steam::handlers::client_msg_handler::ClientMsgHandler;
 use crate::steam::steam_client::callback_mgr::callback_msg::CallbackMsg;
 use crate::steam::steam_client::steam_client::SteamClient;
-use crate::types::job_id::JobID;
+use crate::types::job_id::{AsyncJob, JobID};
 
 use super::callbacks::{ServiceMethodNotification, ServiceMethodResponse};
 
@@ -58,12 +62,18 @@ pub struct ServiceMessage {
 type MessageDecoder =
     Arc<dyn Fn(&ServiceMessage) -> SteamResult<Box<dyn CallbackMsg>> + Send + Sync>;
 
+/// A decoder together with the body type it decodes, so a second registration
+/// with a different type can be rejected instead of silently replacing the
+/// first one.
+struct DecoderEntry {
+    type_id: TypeId,
+    decoder: MessageDecoder,
+}
+
 /// A client for one unified service.
 pub struct UnifiedService {
     service_name: String,
     client: Weak<SteamClient>,
-    response_decoders: DashMap<String, MessageDecoder>,
-    notification_decoders: DashMap<String, MessageDecoder>,
 }
 
 impl UnifiedService {
@@ -78,19 +88,24 @@ impl UnifiedService {
     where
         T: prost::Message + Default + Clone + 'static,
     {
-        let decoder: MessageDecoder = Arc::new(
-            |message: &ServiceMessage| -> SteamResult<Box<dyn CallbackMsg>> {
-                let callback = ServiceMethodResponse::<T>::from_parts(
-                    message.job_id,
-                    message.result,
-                    message.body.as_slice(),
-                )?;
+        let entry = DecoderEntry {
+            type_id: TypeId::of::<T>(),
+            decoder: Arc::new(
+                |message: &ServiceMessage| -> SteamResult<Box<dyn CallbackMsg>> {
+                    let callback = ServiceMethodResponse::<T>::from_parts(
+                        message.job_id,
+                        message.result,
+                        message.body.as_slice(),
+                    )?;
 
-                Ok(Box::new(callback) as Box<dyn CallbackMsg>)
-            },
-        );
+                    Ok(Box::new(callback) as Box<dyn CallbackMsg>)
+                },
+            ),
+        };
 
-        let _ = self.response_decoders.insert(method.to_string(), decoder);
+        if let Ok(unified) = self.unified_messages() {
+            unified.register_response_decoder(&self.service_name, method, entry);
+        }
     }
 
     /// Registers the notification body type of one of this service's methods.
@@ -98,20 +113,23 @@ impl UnifiedService {
     where
         T: prost::Message + Default + Clone + 'static,
     {
-        let decoder: MessageDecoder = Arc::new(
-            |message: &ServiceMessage| -> SteamResult<Box<dyn CallbackMsg>> {
-                let callback = ServiceMethodNotification::<T>::from_parts(
-                    &message.job_name,
-                    message.body.as_slice(),
-                )?;
+        let entry = DecoderEntry {
+            type_id: TypeId::of::<T>(),
+            decoder: Arc::new(
+                |message: &ServiceMessage| -> SteamResult<Box<dyn CallbackMsg>> {
+                    let callback = ServiceMethodNotification::<T>::from_parts(
+                        &message.job_name,
+                        message.body.as_slice(),
+                    )?;
 
-                Ok(Box::new(callback) as Box<dyn CallbackMsg>)
-            },
-        );
+                    Ok(Box::new(callback) as Box<dyn CallbackMsg>)
+                },
+            ),
+        };
 
-        let _ = self
-            .notification_decoders
-            .insert(method.to_string(), decoder);
+        if let Ok(unified) = self.unified_messages() {
+            unified.register_notification_decoder(&self.service_name, method, entry);
+        }
     }
 
     /// Handles a response for this service.
@@ -120,13 +138,8 @@ impl UnifiedService {
         method_name: &str,
         message: &ServiceMessage,
     ) -> SteamResult<()> {
-        let decoder = match self.response_decoders.get(method_name) {
-            Some(entry) => Arc::clone(entry.value()),
-            None => return Ok(()),
-        };
-
-        let callback = decoder(message)?;
-        self.post_callback(callback)
+        self.unified_messages()?
+            .handle_service_response(&self.service_name, method_name, message)
     }
 
     /// Handles a notification for this service.
@@ -135,30 +148,26 @@ impl UnifiedService {
         method_name: &str,
         message: &ServiceMessage,
     ) -> SteamResult<()> {
-        let decoder = match self.notification_decoders.get(method_name) {
-            Some(entry) => Arc::clone(entry.value()),
-            None => return Ok(()),
-        };
-
-        let callback = decoder(message)?;
-        self.post_callback(callback)
+        self.unified_messages()?
+            .handle_service_notification(&self.service_name, method_name, message)
     }
 
     /// Calls a method of this service. The response comes as a
     /// [`ServiceMethodResponse`].
-    pub async fn send_message<TRequest, TResult>(
+    pub fn send_message<TRequest, TResult>(
         &self,
         method: &str,
         message: TRequest,
-    ) -> SteamResult<ServiceMethodResponse<TResult>>
+    ) -> SteamResult<AsyncJob<ServiceMethodResponse<TResult>>>
     where
         TRequest: prost::Message + Default,
         TResult: prost::Message + Default + Clone + 'static,
     {
-        let name = service_method_name(&self.service_name, method);
-        let handler = self.unified_messages()?;
+        self.set_response_type::<TResult>(method);
 
-        handler.send_message(&name, message).await
+        let name = service_method_name(&self.service_name, method);
+
+        self.unified_messages()?.send_message(&name, message)
     }
 
     /// Sends a notification to a method of this service.
@@ -184,19 +193,14 @@ impl UnifiedService {
             .upgrade()
             .ok_or_else(|| SteamError::Connection("SteamClient has been dropped".to_string()))
     }
-
-    /// Posts a callback to the client.
-    fn post_callback(&self, callback: Box<dyn CallbackMsg>) -> SteamResult<()> {
-        self.client()?.post_callback(callback);
-        Ok(())
-    }
 }
 
 /// Steamworks unified messages.
 pub struct SteamUnifiedMessages {
     client: Weak<SteamClient>,
     services: DashMap<String, Arc<UnifiedService>>,
-    pending: DashMap<JobID, MessageDecoder>,
+    response_decoders: DashMap<(String, String), DecoderEntry>,
+    notification_decoders: DashMap<(String, String), DecoderEntry>,
 }
 
 impl SteamUnifiedMessages {
@@ -205,7 +209,8 @@ impl SteamUnifiedMessages {
         Self {
             client: Arc::downgrade(client),
             services: DashMap::new(),
-            pending: DashMap::new(),
+            response_decoders: DashMap::new(),
+            notification_decoders: DashMap::new(),
         }
     }
 
@@ -216,7 +221,7 @@ impl SteamUnifiedMessages {
             .ok_or_else(|| SteamError::Connection("SteamClient has been dropped".to_string()))
     }
 
-    /// Creates a client for the named service.
+    /// Creates a client for the named service, or returns the existing one.
     pub fn create_service(
         &self,
         service_name: impl Into<String>,
@@ -224,37 +229,105 @@ impl SteamUnifiedMessages {
         let client = self.client()?;
         let service_name = service_name.into();
 
-        if let Some(service) = self.services.get(&service_name) {
-            return Ok(service.value().clone());
-        }
-
-        let service = Arc::new(UnifiedService {
-            service_name,
-            client: Arc::downgrade(&client),
-            response_decoders: DashMap::new(),
-            notification_decoders: DashMap::new(),
+        let entry = self.services.entry(service_name.clone()).or_insert_with(|| {
+            Arc::new(UnifiedService {
+                service_name,
+                client: Arc::downgrade(&client),
+            })
         });
 
-        let _ = self
-            .services
-            .insert(service.service_name().to_string(), service.clone());
-
-        Ok(service)
+        Ok(Arc::clone(entry.value()))
     }
 
     /// Removes a service; it can't send messages or get notifications anymore.
+    /// The registered body types are kept, so creating the service again
+    /// resumes delivery, like the C# generated switches.
     pub fn remove_service(&self, service_name: &str) {
         let _ = self.services.remove(service_name);
     }
 
+    fn register_response_decoder(&self, service_name: &str, method: &str, entry: DecoderEntry) {
+        let key = (service_name.to_string(), method.to_string());
+
+        match self.response_decoders.entry(key) {
+            Entry::Occupied(existing) => {
+                if existing.get().type_id != entry.type_id {
+                    tracing::warn!(
+                        "Unified message response for {service_name}.{method} is already registered with another type"
+                    );
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(entry);
+            }
+        }
+    }
+
+    fn register_notification_decoder(&self, service_name: &str, method: &str, entry: DecoderEntry) {
+        let key = (service_name.to_string(), method.to_string());
+
+        match self.notification_decoders.entry(key) {
+            Entry::Occupied(existing) => {
+                if existing.get().type_id != entry.type_id {
+                    tracing::warn!(
+                        "Unified message notification for {service_name}.{method} is already registered with another type"
+                    );
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(entry);
+            }
+        }
+    }
+
+    fn handle_service_response(
+        &self,
+        service_name: &str,
+        method_name: &str,
+        message: &ServiceMessage,
+    ) -> SteamResult<()> {
+        let key = (service_name.to_string(), method_name.to_string());
+
+        let Some(entry) = self.response_decoders.get(&key) else {
+            return Ok(());
+        };
+        let decoder = Arc::clone(&entry.value().decoder);
+        drop(entry);
+
+        let callback = decoder(message)?;
+        self.client()?.post_callback(callback);
+
+        Ok(())
+    }
+
+    fn handle_service_notification(
+        &self,
+        service_name: &str,
+        method_name: &str,
+        message: &ServiceMessage,
+    ) -> SteamResult<()> {
+        let key = (service_name.to_string(), method_name.to_string());
+
+        let Some(entry) = self.notification_decoders.get(&key) else {
+            return Ok(());
+        };
+        let decoder = Arc::clone(&entry.value().decoder);
+        drop(entry);
+
+        let callback = decoder(message)?;
+        self.client()?.post_callback(callback);
+
+        Ok(())
+    }
+
     /// Calls a service method. `name` is `Service.Method#Version` (see
     /// [`service_method_name`]). The response comes as a
-    /// [`ServiceMethodResponse`].
-    pub async fn send_message<TRequest, TResult>(
+    /// [`ServiceMethodResponse`] through the registered service.
+    pub fn send_message<TRequest, TResult>(
         &self,
         name: &str,
         message: TRequest,
-    ) -> SteamResult<ServiceMethodResponse<TResult>>
+    ) -> SteamResult<AsyncJob<ServiceMethodResponse<TResult>>>
     where
         TRequest: prost::Message + Default,
         TResult: prost::Message + Default + Clone + 'static,
@@ -263,20 +336,6 @@ impl SteamUnifiedMessages {
 
         let job_id = client.get_next_job_id();
         let job = client.start_job::<ServiceMethodResponse<TResult>>(job_id);
-
-        let decoder: MessageDecoder = Arc::new(
-            |message: &ServiceMessage| -> SteamResult<Box<dyn CallbackMsg>> {
-                let callback = ServiceMethodResponse::<TResult>::from_parts(
-                    message.job_id,
-                    message.result,
-                    message.body.as_slice(),
-                )?;
-
-                Ok(Box::new(callback) as Box<dyn CallbackMsg>)
-            },
-        );
-
-        let _ = self.pending.insert(job_id, decoder);
 
         let e_msg = if client.steam_id().is_some() {
             EMsg::ServiceMethodCallFromClient
@@ -290,11 +349,11 @@ impl SteamUnifiedMessages {
         msg.set_body(message);
 
         if let Err(error) = client.send(&msg) {
-            let _ = self.pending.remove(&job_id);
+            client.job_manager().fail_job(job_id);
             return Err(error);
         }
 
-        job.wait().await
+        Ok(job)
     }
 
     /// Sends a notification. `name` is `Service.Method#Version` (see
@@ -321,36 +380,18 @@ impl SteamUnifiedMessages {
     }
 
     /// Handles the response to a service method.
-    fn handle_response_msg(
-        &self,
-        client: &SteamClient,
-        packet_msg: &dyn IPacketMsg,
-    ) -> SteamResult<()> {
+    fn handle_response_msg(&self, packet_msg: &dyn IPacketMsg) -> SteamResult<()> {
         let message = read_service_message(packet_msg)?;
 
         if message.job_name.is_empty() {
             return Ok(());
         }
 
-        // A response to one of our requests goes to the job waiting for it.
-        let job_id = packet_msg.target_job_id();
-        let decoder = match self.pending.remove(&job_id) {
-            Some((_, decoder)) => decoder,
-            None => {
-                // Otherwise it belongs to one of the registered services.
-                let service = match self.services.get(&message.service_name) {
-                    Some(service) => Arc::clone(service.value()),
-                    None => return Ok(()),
-                };
+        if !self.services.contains_key(&message.service_name) {
+            return Ok(());
+        }
 
-                return service.handle_response_msg(&message.method_name, &message);
-            }
-        };
-
-        let callback = decoder(&message)?;
-        client.post_callback(callback);
-
-        Ok(())
+        self.handle_service_response(&message.service_name, &message.method_name, &message)
     }
 
     /// Handles a service notification.
@@ -361,12 +402,11 @@ impl SteamUnifiedMessages {
             return Ok(());
         }
 
-        let service = match self.services.get(&message.service_name) {
-            Some(service) => Arc::clone(service.value()),
-            None => return Ok(()),
-        };
+        if !self.services.contains_key(&message.service_name) {
+            return Ok(());
+        }
 
-        service.handle_notification_msg(&message.method_name, &message)
+        self.handle_service_notification(&message.service_name, &message.method_name, &message)
     }
 }
 
@@ -413,7 +453,7 @@ fn split_job_name(job_name: &str) -> Option<(String, String)> {
 impl ClientMsgHandler for SteamUnifiedMessages {
     async fn handle_msg(
         &self,
-        client: &SteamClient,
+        _client: &SteamClient,
         packet_msg: &dyn IPacketMsg,
     ) -> SteamResult<()> {
         match packet_msg.msg_type() {
@@ -422,7 +462,7 @@ impl ClientMsgHandler for SteamUnifiedMessages {
                     return Ok(());
                 }
 
-                self.handle_response_msg(client, packet_msg)
+                self.handle_response_msg(packet_msg)
             }
             EMsg::ServiceMethod => {
                 if !packet_msg.is_proto() {

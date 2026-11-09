@@ -41,9 +41,8 @@ fn draw_qr_code(challenge_url: &str) {
 
 /// The QR authentication state shared by every `Connected` callback.
 ///
-/// The client moves to another CM server by itself when Steam asks it to,
-/// and raises `Connected` again on the new server. Starting a fresh QR session
-/// on every `Connected` would leave the old one polling in the background.
+/// A new connection raises `Connected` again. Starting a fresh QR session on
+/// every `Connected` would leave the old one polling in the background.
 #[derive(Default)]
 struct QrLogon {
     /// Cancels the QR session in progress, if any.
@@ -191,19 +190,6 @@ async fn main() -> Result<()> {
 
         steam_client.subscribe::<LoggedOnCallback>(Box::new(move |callback| {
             if callback.result() != EResult::OK {
-                // The server can say "use a different CM server" in answer to a logon,
-                // or before one is sent. The client moves to another server by itself
-                // and repeats a logon that is waiting for its answer, so
-                // this is not the end of the session.
-                if callback.result() == EResult::TryAnotherCM
-                    || callback.result() == EResult::ServiceUnavailable
-                {
-                    println!(
-                        "The CM server asked for a different one; the client moves on its own."
-                    );
-                    return;
-                }
-
                 println!(
                     "Unable to logon to Steam: {:?} / {:?}",
                     callback.result(),
@@ -232,7 +218,7 @@ async fn main() -> Result<()> {
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

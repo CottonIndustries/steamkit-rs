@@ -143,8 +143,8 @@ fn get_packet_msg_returns_packet_client_msg_protobuf_for_messages_with_protomask
     assert!(packet_msg.is_proto(), "the packet must be protobuf backed");
     assert_eq!(EMsg::ClientLogOnResponse, packet_msg.msg_type());
     assert_eq!(data, packet_msg.get_data());
-    assert_eq!(JobID::INVALID, packet_msg.target_job_id());
-    assert_eq!(JobID::INVALID, packet_msg.source_job_id());
+    assert_eq!(JobID::from_value(0), packet_msg.target_job_id());
+    assert_eq!(JobID::from_value(0), packet_msg.source_job_id());
 }
 
 #[test]

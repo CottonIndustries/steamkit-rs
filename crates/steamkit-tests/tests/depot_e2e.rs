@@ -62,10 +62,8 @@ async fn downloads_and_decrypts_a_depot_chunk() {
         .with_test_writer()
         .try_init();
 
-    client.connect(None).await.expect("the CM connection must succeed");
-
-    // `connect` returns as soon as the socket is up, but the CM server only
-    // accepts a logon after the `Connected` event, so wait for that first.
+    // The CM server only accepts a logon after the `Connected` event, so the
+    // subscriptions go in before the connection starts.
     let (logon_tx, logon_rx) = tokio::sync::oneshot::channel();
     let logon_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(logon_tx)));
     let sender = logon_tx.clone();
@@ -95,6 +93,8 @@ async fn downloads_and_decrypts_a_depot_chunk() {
             .log_on_anonymous()
             .expect("the anonymous logon request must be sent");
     }));
+
+    client.connect(None).expect("the CM connection must succeed");
 
     tokio::time::timeout(
         std::time::Duration::from_secs(60),

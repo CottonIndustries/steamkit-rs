@@ -2,13 +2,20 @@
 
 A Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .NET library for talking to the Steam network.
 
+## Status
+
+**Complete.** This is a full port of SteamKit2 **4.0.0-Beta.1** (commit `94812dc3`): every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, with no known behavioural gaps. The crate is **1.0.0**.
+
+- 476 tests pass (`cargo test --workspace --no-fail-fast`); the live tests are `#[ignore]`d.
+- Protocol pins: SteamKit2 `94812dc3`, Protobufs `bdb3957d`.
+
 It covers the CM protocol (TCP, WebSocket and UDP transports, channel encryption), the handlers (`SteamUser`, `SteamFriends`, `SteamApps`, unified messages, game coordinator, ...), the authentication flows (credentials and QR code), the Web API, the CDN client and depot manifests. It also ports SteamKit's tooling: the `.steamd` code generator, the protobuf dumper, and the NetHook2 DLL plus its dump analyzer.
 
 ## Using it
 
 ```toml
 [dependencies]
-steamkit-rs = "0.1.3"
+steamkit-rs = "1.0.0"
 ```
 
 The package is `steamkit-rs` on crates.io (the `steamkit` name was taken), but the library is still called `steamkit`:
@@ -25,6 +32,11 @@ cargo test --workspace --no-fail-fast
 ```
 
 The test suite needs no network access; the few live tests are `#[ignore]`d.
+
+## Documentation
+
+- [`DEVELOPER_GUIDE.md`](crates/DEVELOPER_GUIDE.md) - the per-file guide to every module.
+- [`FILE_INDEX.md`](crates/FILE_INDEX.md) - module index with guide line numbers.
 
 ## Platform support
 

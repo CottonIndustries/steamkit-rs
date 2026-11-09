@@ -1,6 +1,6 @@
 //! The [`CallbackMsg`] trait, implemented by every callback a client posts.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 
 use crate::types::job_id::JobID;
 
@@ -19,6 +19,22 @@ pub trait CallbackMsg: Any + Send + Sync {
 
     /// This callback as a mutable [`Any`], for downcasting to the concrete type.
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// This callback viewed as `type_id`, for a callback that models a
+    /// hierarchy. Defaults to an exact type match.
+    fn as_a(&self, type_id: TypeId) -> Option<&dyn Any> {
+        if self.as_any().type_id() == type_id {
+            Some(self.as_any())
+        } else {
+            None
+        }
+    }
+
+    /// Whether this callback belongs to a subscription of `type_id`, like the
+    /// C# `IsAssignableFrom`.
+    fn is_a(&self, type_id: TypeId) -> bool {
+        self.as_a(type_id).is_some()
+    }
 }
 
 /// Storage for the job id of a [`CallbackMsg`].

@@ -281,3 +281,50 @@ async fn the_connection_can_be_reused_after_a_disconnect() {
         );
     }
 }
+
+#[tokio::test]
+async fn an_idle_connection_is_not_closed_by_the_receive_timeout() {
+    let (listener, address) = listener().await;
+    let client = TcpConnection::new();
+    let mut events = client.events();
+    let short = Duration::from_millis(100);
+
+    let (connected, accepted) = tokio::join!(client.connect(address, short), listener.accept());
+    connected.unwrap();
+    let (_server, _) = accepted.unwrap();
+
+    assert_eq!(ConnectionEvent::Connected, next(&mut events).await);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_no_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_stalled_partial_frame_is_dropped_after_the_receive_timeout() {
+    let (listener, address) = listener().await;
+    let client = TcpConnection::new();
+    let mut events = client.events();
+    let short = Duration::from_millis(100);
+
+    let (connected, accepted) = tokio::join!(client.connect(address, short), listener.accept());
+    connected.unwrap();
+    let (mut server, _) = accepted.unwrap();
+
+    assert_eq!(ConnectionEvent::Connected, next(&mut events).await);
+
+    let mut partial = (100u32).to_le_bytes().to_vec();
+    partial.extend_from_slice(b"VT01");
+    partial.push(0);
+    server.write_all(&partial).await.unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("the stalled frame must time out")
+        .expect("the event stream ended");
+
+    assert!(
+        matches!(event, ConnectionEvent::Disconnected(_)),
+        "expected a disconnect, got {event:?}"
+    );
+}

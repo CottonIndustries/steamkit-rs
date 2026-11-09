@@ -498,7 +498,7 @@ async fn main() -> Result<()> {
     };
 
     println!("Connecting to Steam...");
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     let mut report = Report::default();
     println!();

@@ -11,8 +11,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use bytes::Bytes;
 use futures::{Sink, SinkExt, Stream, StreamExt};
+use sha1::{Digest, Sha1};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::error::Error as WebSocketError;
 use tokio_tungstenite::tungstenite::http::header::{HeaderName, HeaderValue};
@@ -277,7 +280,10 @@ impl std::fmt::Debug for TungsteniteWebSocketSocket {
 }
 
 impl TungsteniteWebSocketSocket {
-    fn new(socket: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> Self {
+    fn new<S>(socket: tokio_tungstenite::WebSocketStream<S>) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let (sink, stream) = socket.split();
 
         Self {
@@ -454,4 +460,105 @@ impl WebSocketFactory for TungsteniteWebSocketFactory {
 
         Ok(Arc::new(TungsteniteWebSocketSocket::new(socket)))
     }
+}
+
+/// Creates websocket sockets through a configured `reqwest::Client`, so the
+/// client's proxy, TLS and custom handlers apply to the upgrade, like the C#
+/// `ClientWebSocket.ConnectAsync(uri, invoker, ...)`.
+#[derive(Clone, Debug)]
+pub struct ReqwestWebSocketFactory {
+    client: reqwest::Client,
+}
+
+impl ReqwestWebSocketFactory {
+    /// Creates a factory that opens sockets through `client`.
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl WebSocketFactory for ReqwestWebSocketFactory {
+    async fn connect(
+        &self,
+        uri: &str,
+        timeout: Duration,
+    ) -> Result<Arc<dyn WebSocketSocket>, SteamError> {
+        let http_uri = websocket_uri_to_http(uri)?;
+
+        let key = base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 16]>());
+
+        let request = self
+            .client
+            .get(http_uri)
+            .version(reqwest::Version::HTTP_11)
+            .header(reqwest::header::CONNECTION, "Upgrade")
+            .header(reqwest::header::UPGRADE, "websocket")
+            .header(reqwest::header::SEC_WEBSOCKET_VERSION, "13")
+            .header(reqwest::header::SEC_WEBSOCKET_KEY, &key);
+
+        let response = tokio::time::timeout(timeout, request.send())
+            .await
+            .map_err(|_| SteamError::Timeout(timeout))?
+            .map_err(|error| {
+                SteamError::Connection(format!("websocket upgrade failed: {error}"))
+            })?;
+
+        if response.status() != reqwest::StatusCode::SWITCHING_PROTOCOLS {
+            return Err(SteamError::Connection(format!(
+                "websocket upgrade failed: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let accept = response
+            .headers()
+            .get(reqwest::header::SEC_WEBSOCKET_ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+
+        if accept != websocket_accept_key(&key) {
+            return Err(SteamError::Connection(
+                "websocket upgrade failed: bad Sec-WebSocket-Accept".to_string(),
+            ));
+        }
+
+        let upgraded = response.upgrade().await.map_err(|error| {
+            SteamError::Connection(format!("websocket upgrade failed: {error}"))
+        })?;
+
+        let socket = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            upgraded,
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+
+        Ok(Arc::new(TungsteniteWebSocketSocket::new(socket)))
+    }
+}
+
+fn websocket_uri_to_http(uri: &str) -> Result<String, SteamError> {
+    if let Some(rest) = uri.strip_prefix("wss://") {
+        return Ok(format!("https://{rest}"));
+    }
+
+    if let Some(rest) = uri.strip_prefix("ws://") {
+        return Ok(format!("http://{rest}"));
+    }
+
+    Err(SteamError::Connection(format!(
+        "invalid websocket URI: {uri}"
+    )))
+}
+
+fn websocket_accept_key(key: &str) -> String {
+    const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+    let mut hasher = Sha1::new();
+    hasher.update(key.as_bytes());
+    hasher.update(GUID.as_bytes());
+
+    base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
 }

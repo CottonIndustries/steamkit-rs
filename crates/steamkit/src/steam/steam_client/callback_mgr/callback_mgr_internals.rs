@@ -56,8 +56,8 @@ impl CallbackSubscription {
     }
 
     /// Whether this subscription wants the given callback.
-    pub fn matches(&self, type_id: TypeId, job_id: JobID) -> bool {
-        if self.type_id != type_id {
+    pub fn matches(&self, msg: &dyn CallbackMsg, job_id: JobID) -> bool {
+        if !msg.is_a(self.type_id) {
             return false;
         }
 
@@ -115,7 +115,10 @@ where
             type_id,
             self.job_id,
             CallbackHandler::Sync(Box::new(move |msg: &dyn CallbackMsg| {
-                if let Some(callback) = msg.as_any().downcast_ref::<TCall>() {
+                if let Some(callback) = msg
+                    .as_a(TypeId::of::<TCall>())
+                    .and_then(|callback| callback.downcast_ref::<TCall>())
+                {
                     on_run(callback);
                 }
             })),

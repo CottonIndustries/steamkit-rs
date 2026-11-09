@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use steamkit::base::generated::steam_language::EResult;
-use steamkit::steam::handlers::steam_unified_messages::callbacks::ServiceMethodNotification;
 use steamkit::steam::handlers::steam_unified_messages::steam_unified_messages::SteamUnifiedMessages;
 use steamkit::steam::handlers::steam_user::callbacks::{LoggedOffCallback, LoggedOnCallback};
 use steamkit::steam::handlers::steam_user::steam_user::{LogOnDetails, SteamUser};
@@ -60,13 +59,21 @@ async fn on_logged_on(
 
     player_service.set_response_type::<CPlayerGetGameBadgeLevelsResponse>(GET_GAME_BADGE_LEVELS_METHOD);
 
-    let _service_response = match player_service
+    let job = match player_service
         .send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
             GET_GAME_BADGE_LEVELS_METHOD,
             request.clone(),
         )
-        .await
     {
+        Ok(job) => job,
+        Err(error) => {
+            eprintln!("Unified service request failed: {error}");
+            is_running.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    let _service_response = match job.wait().await {
         Ok(response) => response,
         Err(error) => {
             eprintln!("Unified service request failed: {error}");
@@ -78,13 +85,21 @@ async fn on_logged_on(
     // alternatively, the request can be made using SteamUnifiedMessages
     // directly, but then you must build the service request name manually. the
     // name format is in the form of <Service>.<Method>#<Version>
-    let response = match steam_unified_messages
+    let job = match steam_unified_messages
         .send_message::<CPlayerGetGameBadgeLevelsRequest, CPlayerGetGameBadgeLevelsResponse>(
             "Player.GetGameBadgeLevels#1",
             request,
         )
-        .await
     {
+        Ok(job) => job,
+        Err(error) => {
+            eprintln!("Unified service request failed: {error}");
+            is_running.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    let response = match job.wait().await {
         Ok(response) => response,
         Err(error) => {
             eprintln!("Unified service request failed: {error}");
@@ -139,23 +154,22 @@ async fn main() -> Result<()> {
 
     let is_running = Arc::new(AtomicBool::new(true));
 
-    // subscribe to incoming messages from the GameNotificationsClient service
+    // subscribe to incoming messages from the GameNotificationsClient service;
+    // subscribing creates the service, like the C# does
     {
-        let notification_service = steam_unified_messages.create_service(GAME_NOTIFICATIONS_SERVICE)?;
-
-        notification_service.set_notification_type::<CGameNotificationsOnNotificationsRequestedNotification>(
-            "OnNotificationsRequested",
-        );
-
         steam_client.callback_manager().subscribe_service_notification::<
-            ServiceMethodNotification<CGameNotificationsOnNotificationsRequestedNotification>,
-        >(Box::new(move |notification| {
-            println!(
-                "User with id {} started the game:",
-                notification.body().steamid.unwrap_or_default()
-            );
-            println!("{}", notification.body().appid.unwrap_or_default());
-        }));
+            CGameNotificationsOnNotificationsRequestedNotification,
+        >(
+            GAME_NOTIFICATIONS_SERVICE,
+            "OnNotificationsRequested",
+            Box::new(move |notification| {
+                println!(
+                    "User with id {} started the game:",
+                    notification.body().steamid.unwrap_or_default()
+                );
+                println!("{}", notification.body().appid.unwrap_or_default());
+            }),
+        )?;
     }
 
     // register a few callbacks we're interested in
@@ -234,7 +248,7 @@ async fn main() -> Result<()> {
     println!("Connecting to Steam...");
 
     // initiate the connection
-    steam_client.connect(None).await?;
+    steam_client.connect(None)?;
 
     // create our callback handling loop
     while is_running.load(Ordering::SeqCst) {

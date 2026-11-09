@@ -3,14 +3,14 @@
 //! The manager is standalone: the client hands every posted callback to
 //! [`CallbackManager::dispatch`], so subscribing is enough to receive them.
 //!
-//! * Subscriptions match the exact `TypeId`, so there's no catch-all
-//!   subscription.
+//! * Subscriptions match through [`CallbackMsg::is_a`], which defaults to the
+//!   exact `TypeId`; a callback hierarchy can override it.
 //! * [`CallbackManager::dispatch`] spawns async subscribers instead of
 //!   waiting for them, so tests that need to wait use
 //!   [`CallbackManager::dispatch_async`].
 //! * Async subscribers return `()`, so they can't report errors.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -608,4 +608,99 @@ async fn async_callback_exception_wrapped_in_aggregate_on_sync_path() {
     mgr.dispatch(queued);
 
     mgr.unsubscribe(subscription);
+}
+
+/// A base callback that a derived callback can stand in for.
+#[derive(Debug)]
+struct BaseCallback;
+
+impl CallbackMsg for BaseCallback {
+    fn job_id(&self) -> JobID {
+        JobID::INVALID
+    }
+
+    fn set_job_id(&mut self, _job_id: JobID) {}
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+/// A derived callback that also exposes its base type.
+#[derive(Debug)]
+struct DerivedCallback {
+    base: BaseCallback,
+}
+
+impl CallbackMsg for DerivedCallback {
+    fn job_id(&self) -> JobID {
+        JobID::INVALID
+    }
+
+    fn set_job_id(&mut self, _job_id: JobID) {}
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_a(&self, type_id: TypeId) -> Option<&dyn Any> {
+        if type_id == TypeId::of::<BaseCallback>() {
+            Some(&self.base)
+        } else if type_id == TypeId::of::<DerivedCallback>() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+fn a_callback_can_match_a_base_type_like_is_assignable_from() {
+    let mgr = CallbackManager::new();
+    let seen = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&seen);
+
+    let subscription = mgr.subscribe::<BaseCallback>(Box::new(move |_| {
+        flag.store(true, Ordering::SeqCst);
+    }));
+
+    mgr.dispatch(Box::new(DerivedCallback {
+        base: BaseCallback,
+    }));
+
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "the base subscription must receive the derived callback"
+    );
+
+    mgr.unsubscribe(subscription);
+}
+
+#[test]
+fn a_guarded_subscription_unsubscribes_when_dropped() {
+    let mgr = CallbackManager::new();
+
+    {
+        let _guard = mgr.subscribe_guarded::<CallbackForTest>(Box::new(|_| {}));
+        assert_eq!(1, mgr.subscription_count());
+    }
+
+    assert_eq!(0, mgr.subscription_count());
+}
+
+#[test]
+fn ignoring_a_plain_subscription_keeps_it_alive() {
+    let mgr = CallbackManager::new();
+
+    mgr.subscribe::<CallbackForTest>(Box::new(|_| {}));
+
+    assert_eq!(1, mgr.subscription_count());
 }
