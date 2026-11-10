@@ -317,6 +317,48 @@ async fn an_encrypted_packet_that_does_not_decrypt_disconnects() {
 }
 
 #[tokio::test]
+async fn a_short_encrypted_packet_disconnects() {
+    let mut fixture = fixture().await;
+    handshake(&mut fixture).await;
+
+    fixture.inner.receive(vec![0u8; 7]);
+
+    eventually("the inner connection was disconnected", || {
+        !fixture.inner.disconnect_calls().is_empty()
+    })
+    .await;
+
+    assert_eq!(
+        ConnectionEvent::Disconnected(DisconnectedEventArgs::new(false)),
+        next(&mut fixture.events).await
+    );
+}
+
+#[tokio::test]
+async fn packets_after_disconnect_are_ignored() {
+    let mut fixture = fixture().await;
+    handshake(&mut fixture).await;
+
+    fixture.inner.receive(vec![0u8; 48]);
+    eventually("the inner connection was disconnected", || {
+        !fixture.inner.disconnect_calls().is_empty()
+    })
+    .await;
+    assert_eq!(
+        ConnectionEvent::Disconnected(DisconnectedEventArgs::new(false)),
+        next(&mut fixture.events).await
+    );
+
+    let sent_before = fixture.inner.sent().len();
+    fixture
+        .inner
+        .receive(encrypt_request(EUniverse::Public as i32, 16));
+
+    assert_no_event(&mut fixture.events).await;
+    assert_eq!(sent_before, fixture.inner.sent().len());
+}
+
+#[tokio::test]
 async fn the_inner_disconnection_is_passed_on_and_resets_the_handshake() {
     let mut fixture = fixture().await;
     handshake(&mut fixture).await;

@@ -59,7 +59,7 @@ from the top.
 | 51 | `crates/steamkit-tests/tests/depot_chunk.rs` | 8620 | 546 |
 | 52 | `crates/steamkit-tests/tests/depot_e2e.rs` | 9356 | 318 |
 | 53 | `crates/steamkit-tests/tests/depot_manifest.rs` | 8649 | 216 |
-| 54 | `crates/steamkit-tests/tests/envelope_encrypted_connection.rs` | 9211 | 421 |
+| 54 | `crates/steamkit-tests/tests/envelope_encrypted_connection.rs` | 9211 | 463 |
 | 55 | `crates/steamkit-tests/tests/file_storage_server_list_provider.rs` | 8667 | 71 |
 | 56 | `crates/steamkit-tests/tests/game_id.rs` | 8678 | 52 |
 | 57 | `crates/steamkit-tests/tests/http_client_purpose.rs` | 8686 | 91 |
