@@ -241,11 +241,66 @@ impl Steam3Manifest {
             let file_mapping = Steam3ManifestFileMapping::deserialize(reader)?;
             mapping.push(file_mapping);
 
-            remaining = remaining.wrapping_sub((reader.position() - start) as u32);
+            let consumed = reader.position() - start;
+
+            if consumed > remaining as u64 {
+                return Err(SteamError::Malformed(
+                    "data is not a valid steam3 manifest: file mapping exceeds the declared size."
+                        .to_string(),
+                ));
+            }
+
+            remaining -= consumed as u32;
         }
 
         self.mapping = mapping;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_header(file_mapping_size: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&4u32.to_le_bytes()); // version
+        data.extend_from_slice(&0u32.to_le_bytes()); // depot id
+        data.extend_from_slice(&0u64.to_le_bytes()); // manifest gid
+        data.extend_from_slice(&0u32.to_le_bytes()); // creation time
+        data.extend_from_slice(&0u32.to_le_bytes()); // filenames encrypted
+        data.extend_from_slice(&0u64.to_le_bytes()); // uncompressed size
+        data.extend_from_slice(&0u64.to_le_bytes()); // compressed size
+        data.extend_from_slice(&0u32.to_le_bytes()); // chunk count
+        data.extend_from_slice(&0u32.to_le_bytes()); // file entry count
+        data.extend_from_slice(&file_mapping_size.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // encrypted crc
+        data.extend_from_slice(&0u32.to_le_bytes()); // decrypted crc
+        data.extend_from_slice(&0u32.to_le_bytes()); // flags
+        data
+    }
+
+    #[test]
+    fn rejects_file_mapping_that_exceeds_the_declared_size() {
+        let mut data = manifest_header(1);
+
+        // One mapping: empty name (1), total size (8), flags (4), content hash
+        // (20), filename hash (20), chunk count (4), no chunks.
+        data.push(0);
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&[0u8; 20]);
+        data.extend_from_slice(&[0u8; 20]);
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut reader = ByteReader::new(&data);
+        let error = Steam3Manifest::default()
+            .deserialize(&mut reader)
+            .expect_err("the mapping must not overrun the declared size");
+
+        assert!(
+            matches!(error, SteamError::Malformed(message) if message.contains("exceeds the declared size"))
+        );
     }
 }

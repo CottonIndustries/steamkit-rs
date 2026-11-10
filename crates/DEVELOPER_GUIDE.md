@@ -48,7 +48,7 @@
     - [crates/steamkit/src/types/global_id.rs — 168 lines](#cratessteamkitsrctypesglobal_idrs--168-lines)
     - [crates/steamkit/src/types/job_id.rs — 515 lines](#cratessteamkitsrctypesjob_idrs--515-lines)
     - [crates/steamkit/src/types/key_value.rs — 1137 lines](#cratessteamkitsrctypeskey_valuers--1137-lines)
-    - [crates/steamkit/src/types/manifest.rs — 251 lines](#cratessteamkitsrctypesmanifestrs--251-lines)
+    - [crates/steamkit/src/types/manifest.rs — 306 lines](#cratessteamkitsrctypesmanifestrs--306-lines)
     - [crates/steamkit/src/types/message_object.rs — 52 lines](#cratessteamkitsrctypesmessage_objectrs--52-lines)
     - [crates/steamkit/src/types/pub_file.rs — 56 lines](#cratessteamkitsrctypespub_filers--56-lines)
     - [crates/steamkit/src/types/steam_id.rs — 820 lines](#cratessteamkitsrctypessteam_idrs--820-lines)
@@ -1172,7 +1172,7 @@ explicitly). The C# text reader caps an unquoted token at 1024 characters and th
 `String::from_utf8_lossy`, so invalid UTF-8 becomes `U+FFFD` instead of failing the
 parse — the same as the C# `Encoding.UTF8` decoder.
 
-#### `crates/steamkit/src/types/manifest.rs` — 251 lines
+#### `crates/steamkit/src/types/manifest.rs` — 306 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Types/Manifest.cs` (the `internal sealed class
 Steam3Manifest`)
 **Purpose:** the *legacy v4* binary depot manifest format, plus the shared little-endian
@@ -1189,7 +1189,8 @@ u64` are the C# `DateUtils.DateTimeFromUnixTime` / `DateTimeToUnixTime`.
 `deserialize(reader)` reads the version first — the magic has already been consumed by
 `DepotManifest::internal_deserialize` — and rejects anything but version 4. The mapping
 section is then read until `file_mapping_size` **bytes** have been consumed, measuring
-each entry with the stream position. `Steam3ManifestFileMapping` is `file_name`
+each entry with the stream position; an entry that consumes more than the remaining
+budget is rejected as `SteamError::Malformed`. `Steam3ManifestFileMapping` is `file_name`
 (NUL-terminated), `total_size`, `flags`, `hash_content` (20 bytes), `hash_file_name` (20
 bytes), `num_chunks` and `chunks`; `Steam3ManifestChunk` is `chunk_gid` (20 bytes),
 `checksum`, `offset`, `decompressed_size` and `compressed_size`.
@@ -1199,9 +1200,10 @@ is supported.")`; the Rust returns `SteamError::Malformed("Only version 4 is
 supported.")`. `CreationTime` is read as a **32-bit** unix time (`read_u32()? as u64`),
 matching the C#. The mapping loop treats `file_mapping_size` as a byte budget, not a
 count: the C# `for (uint i = FileMappingSize; i > 0; )` subtracts the bytes each entry
-consumed. The Rust mirrors this with `remaining.wrapping_sub(...)` — the `wrapping_sub`
-matters, because an entry that overruns the budget would otherwise panic in a debug
-build. The magic is deliberately **not** verified inside `Steam3Manifest::deserialize`
+consumed. The Rust does the same and returns `SteamError::Malformed("data is not a valid
+steam3 manifest: file mapping exceeds the declared size.")` when an entry overruns the
+budget, so a malformed manifest cannot wrap the counter or spin. The magic is deliberately
+**not** verified inside `Steam3Manifest::deserialize`
 (the C# comments the check out to avoid seeking); `DepotManifest::internal_deserialize`
 has already matched `Steam3Manifest::MAGIC`. The C# reads the SHA-1 hashes with
 `ds.ReadBytes(20)`, which returns fewer than 20 bytes at the end of the stream without
