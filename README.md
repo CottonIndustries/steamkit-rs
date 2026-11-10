@@ -4,10 +4,10 @@ A Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .NET librar
 
 ## Status
 
-**Complete.** This is a full port of SteamKit2 **4.0.0-Beta.1** (commit `94812dc3`): every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, with no known behavioural gaps. The crate is **1.0.1**.
+**Complete.** This is a full port of SteamKit2 **4.0.0-Beta.1** (commit `94812dc3`), including the post-Beta.1 fixes through `131fb033` (`4.0.0-Beta.2` + 8): every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, with no known behavioural gaps. The crate is **1.0.1**.
 
-- 476 tests pass (`cargo test --workspace --no-fail-fast`); the live tests are `#[ignore]`d.
-- Protocol pins: SteamKit2 `94812dc3`, Protobufs `bdb3957d`.
+- 491 tests pass (`cargo test --workspace --no-fail-fast`); the live tests are `#[ignore]`d.
+- Protocol pins: SteamKit2 `94812dc3` (base) + fixes through `131fb033`, Protobufs `bdb3957d`.
 
 It covers the CM protocol (TCP, WebSocket and UDP transports, channel encryption), the handlers (`SteamUser`, `SteamFriends`, `SteamApps`, unified messages, game coordinator, ...), the authentication flows (credentials and QR code), the Web API, the CDN client and depot manifests. It also ports SteamKit's tooling: the `.steamd` code generator, the protobuf dumper, and the NetHook2 DLL plus its dump analyzer.
 

@@ -6,7 +6,7 @@
 >
 > | | |
 > |---|---|
-> | C# source | `SteamKit2` 4.0.0-Beta.1, commit `94812dc3` (2026-11-02), **still pre-`ProtoClient`** — it uses `CMClient` + `AsyncJobManager` + `CallbackMgr`, *not* `ProtoClient`/`ProtoHandler` |
+> | C# source | `SteamKit2` 4.0.0-Beta.1, commit `94812dc3` (2026-11-02), plus the post-Beta.1 fixes through `131fb033`; **still pre-`ProtoClient`** — it uses `CMClient` + `AsyncJobManager` + `CallbackMgr`, *not* `ProtoClient`/`ProtoHandler` |
 > | Valve protobuf source | commit `bdb3957d`, vendored at `vendor/Protobufs/` |
 > | Crates | 6 · **219** library files · **67,096** hand-written lines (all crates, excluding the module manifests and the generated enums) |
 > | Tests | **456 passed, 0 failed**; 4 ignored entries |

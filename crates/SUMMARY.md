@@ -4,17 +4,17 @@ A faithful Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .N
 
 ## 1. What this is / status
 
-SteamKit2 is pinned at commit `94812dc3` (**4.0.0-Beta.1**, still upstream `master`); the protobufs are pinned at `bdb3957d`. Every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, and the behaviour matches the pinned commit.
+SteamKit2 is based on commit `94812dc3` (**4.0.0-Beta.1**); the post-Beta.1 fixes through `131fb033` (`4.0.0-Beta.2` + 8) are ported as well. The protobufs are pinned at `bdb3957d`. Every public type, all 14 samples, all 5 tools and all 33 C# test files are ported, and the behaviour matches the ported commits.
 
 | Item | Value |
 |---|---|
-| C# spec | SteamKit2 4.0.0-Beta.1, commit `94812dc3` |
+| C# spec | SteamKit2 4.0.0-Beta.1 (`94812dc3`) + fixes through `131fb033` (`4.0.0-Beta.2` + 8) |
 | Protobufs | SteamDatabase/Protobufs `bdb3957d` — 155 staged `.proto` |
 | Crate | `steamkit-rs` **1.0.1** (library name `steamkit`) |
 | MSRV / edition | 1.89 / 2021 |
 | Release | **v1.0.1** tagged and released 2026-11-09 (`CottonIndustries/steamkit-rs`) |
 | crates.io | 0.1.4 — 0.1.5, 1.0.0 and 1.0.1 are not published |
-| Tests | `cargo test --workspace --no-fail-fast` → **476 passed, 0 failed, 4 ignored** (75 binaries) |
+| Tests | `cargo test --workspace --no-fail-fast` → **491 passed, 0 failed, 4 ignored** (75 binaries) |
 | Crypto stack | `rsa` 0.10.0, `hmac` 0.13.0, `sha1` 0.11.0 since 2026-11-09, one `digest` 0.11.3 |
 | `CURRENT_PROTOCOL` | 65581 |
 
@@ -161,10 +161,10 @@ Typical path: read §3 of the guide for the shape, find the module in `FILE_INDE
 
 Pins and the refresh procedure live in **`DEPENDENCIES.md`**; that file is the single maintenance reference. In brief:
 
-- Pins: SteamKit2 `94812dc3`, protobufs `bdb3957d`, `CURRENT_PROTOCOL` 65581, bundled protoc 3.3.0.
+- Pins: SteamKit2 `94812dc3` + fixes through `131fb033`, protobufs `bdb3957d`, `CURRENT_PROTOCOL` 65581, bundled protoc 3.3.0.
 - 36 direct dependencies; only `flate2` 1.1.11 (patch), `dashmap` 7 (release candidate), `windows` 0.63+ and `rsa` 0.10.1 are pending.
 - A version bump touches the workspace `Cargo.toml`, the protos pin in `crates/steamkit/Cargo.toml`, `Cargo.lock`, the root `README.md` and the two crate READMEs, then tags and releases.
-- Gates: `cargo check --workspace --all-targets`, then `cargo test --workspace --no-fail-fast` (476 tests), then the live checks — QR logon, TCP and WebSocket, a soak, the proxy tunnel and the CDN sample.
+- Gates: `cargo check --workspace --all-targets`, then `cargo test --workspace --no-fail-fast` (491 tests), then the live checks — QR logon, TCP and WebSocket, a soak, the proxy tunnel and the CDN sample.
 - After any SteamKit2 or protobuf re-pin: regenerate, re-audit the changed handlers, update `CURRENT_PROTOCOL` if it moved, and refresh `SUMMARY.md`, `DEVELOPER_GUIDE.md` and `FILE_INDEX.md`.
 - Docs are local-only, committed in the repository; they are not published with the crates.
 

@@ -2,7 +2,7 @@
 
 A Rust port of [SteamKit2](https://github.com/SteamRE/SteamKit), the .NET library for talking to the Steam network.
 
-**Complete port of SteamKit2 4.0.0-Beta.1** - every public type, sample and test file, with no known behavioural gaps.
+**Complete port of SteamKit2 4.0.0-Beta.1**, including the post-Beta.1 fixes through `131fb033` - every public type, sample and test file, with no known behavioural gaps.
 
 The package is `steamkit-rs` (the `steamkit` name was taken on crates.io), but the library is called `steamkit`:
 
