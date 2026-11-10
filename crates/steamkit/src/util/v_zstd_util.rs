@@ -30,18 +30,21 @@ impl VZstdUtil {
             )));
         }
 
-        // Native byte order, like the reference implementation.
-        if u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) != VZSTD_HEADER {
+        if u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) != VZSTD_HEADER {
             return Err(SteamError::Decompression(
                 "Expecting VZstdHeader at start of stream".to_string(),
             ));
         }
 
-        let crc32 = i32::from_ne_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
+        let crc32 = u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
         let footer = buffer.len() - FOOTER_LENGTH;
-        let crc32_footer =
-            i32::from_ne_bytes([buffer[footer], buffer[footer + 1], buffer[footer + 2], buffer[footer + 3]]);
-        let size_decompressed = i32::from_ne_bytes([
+        let crc32_footer = u32::from_le_bytes([
+            buffer[footer],
+            buffer[footer + 1],
+            buffer[footer + 2],
+            buffer[footer + 3],
+        ]);
+        let size_decompressed = i32::from_le_bytes([
             buffer[footer + 4],
             buffer[footer + 5],
             buffer[footer + 6],
@@ -80,14 +83,40 @@ impl VZstdUtil {
 
         destination[..decompressed.len()].copy_from_slice(&decompressed);
 
-        if verify_checksum
-            && crc32fast::hash(&destination[..decompressed.len()]) != crc32_footer as u32
-        {
+        if verify_checksum && crc32fast::hash(&destination[..decompressed.len()]) != crc32_footer {
             return Err(SteamError::Decompression(
                 "CRC does not match decompressed data. VZstd data may be corrupted.".to_string(),
             ));
         }
 
         Ok(size_decompressed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_bit_crc_is_parsed_as_unsigned() {
+        let payload = b"hello";
+        let compressed = zstd::stream::encode_all(&payload[..], 0).expect("compress the payload");
+        let crc = 0x8000_0001u32;
+
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&VZSTD_HEADER.to_le_bytes());
+        buffer.extend_from_slice(&crc.to_le_bytes());
+        buffer.extend_from_slice(&compressed);
+        buffer.extend_from_slice(&crc.to_le_bytes());
+        buffer.extend_from_slice(&(payload.len() as i32).to_le_bytes());
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+        buffer.extend_from_slice(b"zsv");
+
+        let mut destination = vec![0u8; payload.len()];
+        let written = VZstdUtil::decompress(&buffer, &mut destination, false)
+            .expect("a high-bit CRC must not be rejected");
+
+        assert_eq!(payload.len() as i32, written);
+        assert_eq!(payload, &destination[..]);
     }
 }

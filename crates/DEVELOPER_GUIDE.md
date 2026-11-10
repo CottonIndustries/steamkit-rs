@@ -89,7 +89,7 @@
     - [crates/steamkit/src/util/value_stopwatch.rs — 38 lines](#cratessteamkitsrcutilvalue_stopwatchrs--38-lines)
     - [crates/steamkit/src/util/v_zip_delta_util.rs — 46 lines](#cratessteamkitsrcutilv_zip_delta_utilrs--46-lines)
     - [crates/steamkit/src/util/win32_helpers.rs — 79 lines](#cratessteamkitsrcutilwin32_helpersrs--79-lines)
-    - [crates/steamkit/src/util/v_zstd_util.rs — 93 lines](#cratessteamkitsrcutilv_zstd_utilrs--93-lines)
+    - [crates/steamkit/src/util/v_zstd_util.rs — 122 lines](#cratessteamkitsrcutilv_zstd_utilrs--122-lines)
     - [crates/steamkit/src/util/v_zip_util.rs — 172 lines](#cratessteamkitsrcutilv_zip_utilrs--172-lines)
     - [crates/steamkit/src/util/zip_util.rs — 196 lines](#cratessteamkitsrcutilzip_utilrs--196-lines)
     - [LZMA SDK — the compress side](#lzma-sdk--the-compress-side)
@@ -2828,21 +2828,21 @@ The Rust crate forbids `unsafe` (`#![forbid(unsafe_code)]` in `src/lib.rs`), so 
 - The script sets `$ErrorActionPreference = 'Stop'`, so a failing cmdlet aborts the whole script with a non-zero exit code instead of silently continuing; combined with the empty-stdout check, that is what turns "no serial number" into an error instead of an empty string.
 - The module is compiled on every platform (`pub mod win32_helpers;` in `util/mod.rs` is unconditional) even though it only works on Windows — it calls no Windows API directly, it just spawns a shell, so it compiles anywhere but succeeds only where PowerShell and the storage cmdlets exist.
 
-#### `crates/steamkit/src/util/v_zstd_util.rs` — 93 lines
+#### `crates/steamkit/src/util/v_zstd_util.rs` — 122 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Util/VZstdUtil.cs`
 **Purpose:** Decodes the "VZstd" container that Valve uses for zstd-compressed depot chunks. The container is a thin wrapper around a standard zstd frame: an 8-byte header, the raw zstd payload, and a 15-byte footer that repeats the CRC32 and the decompressed size.
 **How it works:** `VZstdUtil::decompress(buffer: &[u8], destination: &mut [u8], verify_checksum: bool) -> Result<i32, SteamError>`:
 - Length guard: `buffer.len() < HEADER_LENGTH (8) + FOOTER_LENGTH (15)` gives `SteamError::Decompression("VZstd data is too short (was N bytes).")`.
-- Header magic: `u32::from_ne_bytes(buffer[0..4])` is compared with `VZSTD_HEADER = 0x615A_5356` (the bytes `"VSZa"` in little-endian order); a mismatch gives "Expecting VZstdHeader at start of stream".
+- Header magic: `u32::from_le_bytes(buffer[0..4])` is compared with `VZSTD_HEADER = 0x615A_5356` (the bytes `"VSZa"` in little-endian order); a mismatch gives "Expecting VZstdHeader at start of stream".
 - Footer: with `footer = buffer.len() - 15`, `crc32` is read from the header at offset 4, `crc32_footer` from the footer at offset 0 (`buffer[len-15..len-11]`) and `size_decompressed` from the footer at offset 4 (`buffer[len-11..len-7]`).
 - Footer magic: the last three bytes must be `'z'`, `'s'`, `'v'`, otherwise "Expecting VZstdFooter at end of stream".
 - `destination.len() < size_decompressed` gives `SteamError::InvalidArgument("The destination buffer is smaller than the decompressed data size.")`.
-- The payload `buffer[8..footer]` is decompressed with `zstd::stream::decode_all`. The `zstd` crate (version `0.13`, listed in `crates/steamkit/Cargo.toml`) is a safe wrapper over the C zstd library through `zstd-sys`; there is no pure-Rust zstd here. A decompression failure is mapped to `SteamError::Decompression("Failed to decompress Zstd.")`, and a length mismatch to "Failed to decompress Zstd (expected N bytes, got M).".
+- The payload `buffer[8..footer]` is decompressed with `zstd::stream::decode_all`. The `zstd` crate (version `0.14`, listed in `crates/steamkit/Cargo.toml`) is a safe wrapper over the C zstd library through `zstd-sys`; there is no pure-Rust zstd here. A decompression failure is mapped to `SteamError::Decompression("Failed to decompress Zstd.")`, and a length mismatch to "Failed to decompress Zstd (expected N bytes, got M).".
 - The result is copied into `destination`; when `verify_checksum` is set, `crc32fast::hash` over the written bytes is compared with `crc32_footer`. The function returns `Ok(size_decompressed)`.
 **Notes and gotchas:**
-- Native byte order is deliberate. The C# uses `MemoryMarshal.Read<uint>` / `Read<int>`, which read in native order, and the port mirrors that with `from_ne_bytes`. On a little-endian machine that is identical to little-endian; on a big-endian machine the magic comparison would fail, so the port is faithful to the C# rather than endian-independent. Note that `depot_chunk.rs` itself sniffs the container with the byte string `b"VSZa"`, which *is* endian-independent — only the header inside `VZstdUtil` is not.
+- The header, CRC and footer fields are read **little-endian**, matching the C# `BinaryPrimitives.ReadUInt32LittleEndian` / `ReadInt32LittleEndian` after the upstream `c72532e6` fix. `depot_chunk.rs` sniffs the container with the byte string `b"VSZa"` as well, so the whole path is endian-independent.
 - The header CRC and the footer CRC are the same value written twice ("They write CRC32 twice?" in the C#). The port asserts this with `debug_assert_eq!(crc32, crc32_footer)`, matching the C# `Debug.Assert`, which is compiled out of release builds. In debug the Rust port panics where the C# would raise an assert dialog; in release both ignore the mismatch.
-- The CRC comparison differs in one respect from the C#. C# compares `Crc32.HashToUInt32(...)` (a `uint`) with `crc32_footer` (an `int`), and C# widens both to `long`, so a negative footer value can never match. The Rust does `crc32_footer as u32`, i.e. it reinterprets the bit pattern, so a negative `int` that holds the correct CRC bits *would* match. The CRC is always small and positive in practice, so the two behave identically on real data.
+- The CRC fields are `u32` on both sides, so a CRC with the high bit set compares correctly; the decompressed size stays `i32`. A unit test covers a high-bit CRC (`0x8000_0001`) to lock the unsigned comparison.
 - The Rust decompresses into a temporary `Vec` and then copies into `destination`, whereas the C# decompresses straight into the caller's array (`ZstdSharp.Decompressor.TryUnwrap`). The Rust path therefore needs one extra allocation of the full decompressed size.
 - The footer layout is "crc (4) + decompressed size (4) + unknown (4) + magic `zsv` (3)" = 15 bytes; the "unknown" field is never interpreted by either implementation.
 - `verify_checksum` is `false` on the depot-chunk path (`depot_chunk.rs` calls `VZstdUtil::decompress(plaintext, destination, false)`), because the depot chunk verifies its own integrity with the Adler-32 checksum from the chunk header. The VZip and zip paths pass `false` for the same reason; the standalone unit tests in `crates/steamkit-tests/tests/depot_chunk.rs` exercise the checksum path with `true`.

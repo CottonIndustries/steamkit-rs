@@ -277,7 +277,7 @@ from the top.
 | 268 | `crates/steamkit/src/util/utils.rs` | 2723 | 234 |
 | 269 | `crates/steamkit/src/util/v_zip_delta_util.rs` | 2796 | 46 |
 | 270 | `crates/steamkit/src/util/v_zip_util.rs` | 2851 | 172 |
-| 271 | `crates/steamkit/src/util/v_zstd_util.rs` | 2831 | 93 |
+| 271 | `crates/steamkit/src/util/v_zstd_util.rs` | 2831 | 122 |
 | 272 | `crates/steamkit/src/util/value_stopwatch.rs` | 2785 | 38 |
 | 273 | `crates/steamkit/src/util/win32_helpers.rs` | 2813 | 79 |
 | 274 | `crates/steamkit/src/util/zip_util.rs` | 2870 | 196 |
