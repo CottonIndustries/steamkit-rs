@@ -155,7 +155,7 @@
     - [The JobID correlation](#the-jobid-correlation)
     - [The C# class versus the Rust trait + struct pair](#the-c-class-versus-the-rust-trait--struct-pair)
     - [crates/steamkit/src/steam/handlers/client_msg_handler.rs — 26 lines](#cratessteamkitsrcsteamhandlersclient_msg_handlerrs--26-lines)
-    - [crates/steamkit/src/steam/handlers/steam_apps/callbacks.rs — 1476 lines](#cratessteamkitsrcsteamhandlerssteam_appscallbacksrs--1476-lines)
+    - [crates/steamkit/src/steam/handlers/steam_apps/callbacks.rs — 1616 lines](#cratessteamkitsrcsteamhandlerssteam_appscallbacksrs--1616-lines)
     - [crates/steamkit/src/steam/handlers/steam_apps/steam_apps.rs — 460 lines](#cratessteamkitsrcsteamhandlerssteam_appssteam_appsrs--460-lines)
     - [crates/steamkit/src/steam/handlers/steam_auth_ticket/callbacks.rs — 150 lines](#cratessteamkitsrcsteamhandlerssteam_auth_ticketcallbacksrs--150-lines)
     - [crates/steamkit/src/steam/handlers/steam_auth_ticket/steam_auth_ticket.rs — 423 lines](#cratessteamkitsrcsteamhandlerssteam_auth_ticketsteam_auth_ticketrs--423-lines)
@@ -4851,7 +4851,7 @@ trait shape is frozen by the porting contract §12.
 
 ---
 
-#### `crates/steamkit/src/steam/handlers/steam_apps/callbacks.rs` — 1476 lines
+#### `crates/steamkit/src/steam/handlers/steam_apps/callbacks.rs` — 1616 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Steam/Handlers/SteamApps/Callbacks.cs`
 **Purpose:** The callback family of the apps/packages handler. It covers everything Steam
 reports about a user's licences and about PICS (the package/app metadata service): the
@@ -4872,8 +4872,9 @@ fn` accessors, and an `impl CallbackMsg` block. The five that matter most:
   `response_pending`, the unknown app/package id lists, and `BTreeMap<u32, PICSProductInfo>`
   for the apps and the packages. `PICSProductInfo` holds the id, change number,
   `missing_token`, the SHA hash, the decoded `KeyValue` tree, `only_public`, and the HTTP
-  fallback: `use_http` is true when there is a non-empty SHA *and* a non-empty `http_host`
-  *and* the buffer is at least `http_min_size` bytes; `http_uri()` then builds
+  fallback: `use_http` is true only when the response is `meta_data_only`,
+  `http_min_size > 0`, the SHA is non-empty, the `http_host` is non-empty, and the buffer
+  is at least `http_min_size` bytes; `http_uri()` then builds
   `http://{host}/appinfo/{id}/sha/{hex}.txt.gz`.
 * **`PICSChangesCallback`** — the change-number bookkeeping: `last_change_number`,
   `current_change_number`, the three `requires_full_*_update` flags and
@@ -4895,7 +4896,11 @@ deterministic. `ELicenseFlags` and `EPaymentMethod` are `[Flags]` enums in C# an
 *combination* of bits; the generated Rust enum cannot, so `License` keeps **both** the enum
 value and the raw bit pattern (`license_flags()`, `license_flags_value()`,
 `payment_method()`, `payment_method_value()`). `ERESULT_DEFAULT = 2` (`EResult::Fail`) is the
-value assumed when an `eresult` field is absent from the wire. The `PayloadReader` adapter
+value assumed when an `eresult` field is absent from the wire. PICS buffers are parsed
+defensively: a text buffer drops a trailing NUL only when one is actually present and is
+reset if the parse fails; a package buffer must be at least four bytes and carry format 1
+before `try_read_as_binary`; empty or truncated buffers are logged when the response was
+not metadata-only and no token is missing. The `PayloadReader` adapter
 over `MsgBase` is the subtlest thing in the file: it hands out **one byte per `read` call**,
 because the C# hands the `MsgBase` stream to a `BinaryReader`/`KeyValue.TryReadAsBinary` that
 consumes it as it goes, while the Rust binary `KeyValue` reader buffers 4 KiB at a time and

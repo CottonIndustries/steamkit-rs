@@ -859,12 +859,13 @@ impl PICSProductInfoCallback {
 
         let http_host = body.http_host.clone().unwrap_or_default();
         let http_min_size = body.http_min_size.unwrap_or_default();
+        let meta_data_only = body.meta_data_only.unwrap_or_default();
 
         let mut packages = BTreeMap::new();
         for package in &body.packages {
             packages.insert(
                 package.packageid.unwrap_or_default(),
-                PICSProductInfo::from_package(package),
+                PICSProductInfo::from_package(package, meta_data_only),
             );
         }
 
@@ -872,13 +873,13 @@ impl PICSProductInfoCallback {
         for app in &body.apps {
             apps.insert(
                 app.appid.unwrap_or_default(),
-                PICSProductInfo::from_app(app, &http_host, http_min_size),
+                PICSProductInfo::from_app(app, &http_host, http_min_size, meta_data_only),
             );
         }
 
         Ok(Self {
             base: CallbackMsgBase::with_job_id(response.target_job_id()),
-            meta_data_only: body.meta_data_only.unwrap_or_default(),
+            meta_data_only,
             response_pending: body.response_pending.unwrap_or_default(),
             unknown_packages: body.unknown_packageids.clone(),
             unknown_apps: body.unknown_appids.clone(),
@@ -955,10 +956,22 @@ impl PICSProductInfo {
         app_info: &c_msg_client_pics_product_info_response::AppInfo,
         http_host: &str,
         http_min_size: u32,
+        meta_data_only: bool,
     ) -> Self {
         let sha_hash = app_info.sha.clone();
-        let key_values = decode_text_key_values(app_info.buffer.as_deref());
+        let buffer = app_info.buffer.as_deref();
 
+        if buffer.map_or(true, |bytes| bytes.is_empty())
+            && !meta_data_only
+            && !app_info.missing_token.unwrap_or_default()
+        {
+            tracing::debug!(
+                "Empty PICS app buffer for app {}",
+                app_info.appid.unwrap_or_default()
+            );
+        }
+
+        let key_values = decode_text_key_values(buffer);
         let has_valid_http_uri =
             sha_hash.as_ref().is_some_and(|sha| !sha.is_empty()) && !http_host.is_empty();
 
@@ -969,14 +982,32 @@ impl PICSProductInfo {
             sha_hash,
             key_values,
             only_public: app_info.only_public.unwrap_or_default(),
-            use_http: has_valid_http_uri && app_info.size.unwrap_or_default() >= http_min_size,
+            use_http: meta_data_only
+                && http_min_size > 0
+                && has_valid_http_uri
+                && app_info.size.unwrap_or_default() >= http_min_size,
             http_host: http_host.to_string(),
         }
     }
 
     /// Builds the product info of a package.
-    fn from_package(package_info: &c_msg_client_pics_product_info_response::PackageInfo) -> Self {
-        let key_values = decode_binary_key_values(package_info.buffer.as_deref());
+    fn from_package(
+        package_info: &c_msg_client_pics_product_info_response::PackageInfo,
+        meta_data_only: bool,
+    ) -> Self {
+        let buffer = package_info.buffer.as_deref();
+
+        if buffer.map_or(true, |bytes| bytes.len() < 4)
+            && !meta_data_only
+            && !package_info.missing_token.unwrap_or_default()
+        {
+            tracing::debug!(
+                "Empty or truncated PICS package buffer for package {}",
+                package_info.packageid.unwrap_or_default()
+            );
+        }
+
+        let key_values = decode_binary_key_values(buffer);
 
         Self {
             id: package_info.packageid.unwrap_or_default(),
@@ -1053,11 +1084,17 @@ fn decode_text_key_values(buffer: Option<&[u8]>) -> KeyValue {
         return key_value;
     }
 
-    // The trailing null byte isn't part of the text.
-    let text = &buffer[..buffer.len() - 1];
-    let mut cursor = Cursor::new(text);
+    let text_length = if buffer[buffer.len() - 1] == 0 {
+        buffer.len() - 1
+    } else {
+        buffer.len()
+    };
+    let mut cursor = Cursor::new(&buffer[..text_length]);
 
-    let _ = key_value.read_as_text(&mut cursor);
+    if let Err(error) = key_value.read_as_text(&mut cursor) {
+        tracing::debug!("Failed to parse PICS text key values: {error}");
+        key_value = KeyValue::new();
+    }
 
     key_value
 }
@@ -1070,12 +1107,24 @@ fn decode_binary_key_values(buffer: Option<&[u8]>) -> KeyValue {
         return key_value;
     };
 
-    // The first four bytes are a flag the Steam client checks before reading
-    // the key values.
-    let payload = &buffer[buffer.len().min(4)..];
-    let mut cursor = Cursor::new(payload);
+    if buffer.len() < 4 {
+        tracing::debug!("PICS package buffer is shorter than the 4-byte format field");
+        return key_value;
+    }
 
-    let _ = key_value.try_read_as_binary(&mut cursor);
+    let format = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+
+    if format != 1 {
+        tracing::debug!("Unknown PICS package buffer format {format}");
+        return key_value;
+    }
+
+    let mut cursor = Cursor::new(&buffer[4..]);
+
+    if !key_value.try_read_as_binary(&mut cursor) {
+        tracing::debug!("Failed to parse PICS binary key values");
+        key_value = KeyValue::new();
+    }
 
     key_value
 }
@@ -1472,5 +1521,96 @@ impl CallbackMsg for PrivateBetaCallback {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_info(
+        buffer: Option<Vec<u8>>,
+        size: u32,
+    ) -> c_msg_client_pics_product_info_response::AppInfo {
+        c_msg_client_pics_product_info_response::AppInfo {
+            appid: Some(1),
+            sha: Some(vec![1]),
+            buffer,
+            size: Some(size),
+            missing_token: Some(false),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn text_buffer_without_trailing_null_keeps_the_last_byte() {
+        let key_values = decode_text_key_values(Some(&br#""root" { "key" "value" }"#[..]));
+
+        assert_eq!(Some("value"), key_values.get("key").as_string());
+    }
+
+    #[test]
+    fn text_buffer_with_trailing_null_is_trimmed() {
+        let mut buffer = br#""root" { "key" "value" }"#.to_vec();
+        buffer.push(0);
+
+        let key_values = decode_text_key_values(Some(&buffer));
+
+        assert_eq!(Some("value"), key_values.get("key").as_string());
+    }
+
+    #[test]
+    fn empty_text_buffer_is_empty() {
+        assert!(decode_text_key_values(Some(&[])).children().is_empty());
+    }
+
+    #[test]
+    fn package_buffer_requires_a_four_byte_format_field() {
+        assert!(decode_binary_key_values(Some(&[1, 0, 0]))
+            .children()
+            .is_empty());
+    }
+
+    #[test]
+    fn package_buffer_requires_format_one() {
+        assert!(decode_binary_key_values(Some(&[2, 0, 0, 0]))
+            .children()
+            .is_empty());
+    }
+
+    #[test]
+    fn package_buffer_with_format_one_is_parsed() {
+        let mut buffer = vec![1, 0, 0, 0];
+        buffer.extend_from_slice(
+            &hex::decode("00546573744F626A65637400016B65790076616C7565000808")
+                .expect("the fixture is valid hex"),
+        );
+
+        let key_values = decode_binary_key_values(Some(&buffer));
+
+        assert_eq!(Some("value"), key_values.get("key").as_string());
+    }
+
+    #[test]
+    fn use_http_requires_metadata_only_and_a_positive_minimum_size() {
+        let app = app_info(Some(vec![0]), 10);
+
+        assert!(!PICSProductInfo::from_app(&app, "host", 1, false).use_http);
+        assert!(!PICSProductInfo::from_app(&app, "host", 0, true).use_http);
+        assert!(PICSProductInfo::from_app(&app, "host", 1, true).use_http);
+    }
+
+    #[test]
+    fn package_with_unknown_format_has_no_key_values() {
+        let package = c_msg_client_pics_product_info_response::PackageInfo {
+            packageid: Some(2),
+            buffer: Some(vec![2, 0, 0, 0]),
+            missing_token: Some(false),
+            ..Default::default()
+        };
+
+        let info = PICSProductInfo::from_package(&package, false);
+
+        assert!(info.key_values().children().is_empty());
     }
 }
