@@ -166,6 +166,11 @@ impl WebSocketContext {
     }
 
     async fn run_loop(self: Arc<Self>, socket: Arc<dyn WebSocketSocket>) {
+        if self.cancel.is_cancelled() {
+            self.notify_disconnected(false);
+            return;
+        }
+
         self.events.emit_connected();
 
         let mut keep_alive = tokio::time::interval_at(
@@ -258,11 +263,9 @@ fn format_host(ip: IpAddr) -> String {
     }
 }
 
-type TungsteniteSink =
-    Box<dyn Sink<Message, Error = WebSocketError> + Unpin + Send>;
+type TungsteniteSink = Box<dyn Sink<Message, Error = WebSocketError> + Unpin + Send>;
 
-type TungsteniteStream =
-    Box<dyn Stream<Item = Result<Message, WebSocketError>> + Unpin + Send>;
+type TungsteniteStream = Box<dyn Stream<Item = Result<Message, WebSocketError>> + Unpin + Send>;
 
 /// A WebSocket socket backed by `tokio-tungstenite`.
 pub struct TungsteniteWebSocketSocket {
@@ -358,9 +361,7 @@ impl WebSocketSocket for TungsteniteWebSocketSocket {
             None => {
                 self.open.store(false, Ordering::SeqCst);
 
-                Err(SteamError::Connection(
-                    "websocket stream ended".to_string(),
-                ))
+                Err(SteamError::Connection("websocket stream ended".to_string()))
             }
         }
     }
@@ -411,9 +412,9 @@ impl WebSocketFactory for TungsteniteWebSocketFactory {
     ) -> Result<Arc<dyn WebSocketSocket>, SteamError> {
         let request = match &self.user_agent {
             Some(user_agent) => {
-                let mut request: Request<()> = uri
-                    .into_client_request()
-                    .map_err(|error| SteamError::Connection(format!("invalid websocket URI: {error}")))?;
+                let mut request: Request<()> = uri.into_client_request().map_err(|error| {
+                    SteamError::Connection(format!("invalid websocket URI: {error}"))
+                })?;
 
                 request.headers_mut().insert(
                     USER_AGENT,
@@ -424,9 +425,9 @@ impl WebSocketFactory for TungsteniteWebSocketFactory {
 
                 request
             }
-            None => uri
-                .into_client_request()
-                .map_err(|error| SteamError::Connection(format!("invalid websocket URI: {error}")))?,
+            None => uri.into_client_request().map_err(|error| {
+                SteamError::Connection(format!("invalid websocket URI: {error}"))
+            })?,
         };
 
         let host = request.uri().host().unwrap_or_default().to_string();

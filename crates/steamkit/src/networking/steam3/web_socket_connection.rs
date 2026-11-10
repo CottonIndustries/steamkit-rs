@@ -39,7 +39,8 @@ pub struct WebSocketConnection {
 
 impl std::fmt::Debug for WebSocketConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WebSocketConnection").finish_non_exhaustive()
+        f.debug_struct("WebSocketConnection")
+            .finish_non_exhaustive()
     }
 }
 
@@ -58,7 +59,7 @@ impl WebSocketConnection {
 
     /// Creates a websocket connection that opens `tokio-tungstenite` sockets.
     pub fn new_tungstenite() -> Self {
-            Self::new(Arc::new(TungsteniteWebSocketFactory::new()))
+        Self::new(Arc::new(TungsteniteWebSocketFactory::new()))
     }
 
     /// Opens `tokio-tungstenite` sockets to the given host name. The host name
@@ -75,9 +76,9 @@ impl WebSocketConnection {
         host: impl Into<String>,
         user_agent: impl Into<String>,
     ) -> Self {
-        let mut connection = Self::new(Arc::new(
-            TungsteniteWebSocketFactory::with_user_agent(user_agent),
-        ));
+        let mut connection = Self::new(Arc::new(TungsteniteWebSocketFactory::with_user_agent(
+            user_agent,
+        )));
         connection.host = Some(host.into());
         connection
     }
@@ -103,6 +104,28 @@ impl WebSocketConnection {
     /// Subscribes to the `Disconnected` event.
     pub fn subscribe_disconnected(&self) -> broadcast::Receiver<DisconnectedEventArgs> {
         self.events.subscribe_disconnected()
+    }
+
+    async fn disconnect_specific(&self, expected: &CurrentConnection, user_initiated: bool) {
+        let removed = {
+            let mut guard = lock(&self.current);
+            let is_current = guard
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.context, &expected.context));
+
+            if is_current {
+                guard.take()
+            } else {
+                None
+            }
+        };
+
+        if let Some(current) = removed {
+            current.context.cancel();
+            current.context.notify_disconnected(user_initiated);
+            let _ = current.socket.close().await;
+            *lock(&self.current_end_point) = None;
+        }
     }
 }
 
@@ -151,9 +174,8 @@ impl IConnection for WebSocketConnection {
                 "WebSocketConnection: Attempted to connect while already connected. Closing old connection..."
             );
             old.context.cancel();
+            old.context.notify_disconnected(false);
             let _ = old.socket.close().await;
-            self.events
-                .emit_disconnected(DisconnectedEventArgs::new(false));
         }
 
         *lock(&self.current_end_point) = Some(end_point);
@@ -189,7 +211,7 @@ impl IConnection for WebSocketConnection {
             Ok(()) => Ok(()),
             Err(err) => {
                 tracing::debug!("WebSocketConnection: Exception while sending data: {err}");
-                self.disconnect(false).await;
+                self.disconnect_specific(&current, false).await;
                 Err(err)
             }
         }
@@ -225,5 +247,120 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::web_socket_context::WebSocketReceive;
+    use super::*;
+    use async_trait::async_trait;
+
+    struct NoopFactory;
+
+    #[async_trait]
+    impl WebSocketFactory for NoopFactory {
+        async fn connect(
+            &self,
+            _uri: &str,
+            _timeout: Duration,
+        ) -> Result<Arc<dyn WebSocketSocket>, SteamError> {
+            Ok(Arc::new(NoopSocket))
+        }
+    }
+
+    struct NoopSocket;
+
+    #[async_trait]
+    impl WebSocketSocket for NoopSocket {
+        async fn send_binary(&self, _data: Bytes) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        async fn receive(&self) -> Result<WebSocketReceive, SteamError> {
+            Err(SteamError::Connection("unused".to_string()))
+        }
+
+        async fn close(&self) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        fn is_open(&self) -> bool {
+            false
+        }
+    }
+
+    fn context(connection: &WebSocketConnection, port: u16) -> Arc<WebSocketContext> {
+        Arc::new(WebSocketContext::new(
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            connection.events.clone(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn specific_disconnect_keeps_a_newer_context() {
+        let connection = WebSocketConnection::new(Arc::new(NoopFactory));
+        let old = context(&connection, 1);
+        let new = context(&connection, 2);
+        let socket: Arc<dyn WebSocketSocket> = Arc::new(NoopSocket);
+
+        *super::lock(&connection.current) = Some(CurrentConnection {
+            context: new,
+            socket: socket.clone(),
+        });
+
+        connection
+            .disconnect_specific(
+                &CurrentConnection {
+                    context: old,
+                    socket,
+                },
+                false,
+            )
+            .await;
+
+        assert!(super::lock(&connection.current).is_some());
+    }
+
+    #[tokio::test]
+    async fn specific_disconnect_removes_the_matching_context() {
+        let connection = WebSocketConnection::new(Arc::new(NoopFactory));
+        let current = context(&connection, 1);
+        let socket: Arc<dyn WebSocketSocket> = Arc::new(NoopSocket);
+
+        *super::lock(&connection.current) = Some(CurrentConnection {
+            context: current.clone(),
+            socket: socket.clone(),
+        });
+
+        connection
+            .disconnect_specific(
+                &CurrentConnection {
+                    context: current,
+                    socket,
+                },
+                false,
+            )
+            .await;
+
+        assert!(super::lock(&connection.current).is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelled_context_does_not_emit_connected() {
+        let connection = WebSocketConnection::new(Arc::new(NoopFactory));
+        let mut connected = connection.events.subscribe_connected();
+        let mut disconnected = connection.events.subscribe_disconnected();
+        let ctx = context(&connection, 1);
+
+        ctx.cancel();
+        ctx.start(Arc::new(NoopSocket));
+
+        tokio::time::timeout(Duration::from_secs(1), disconnected.recv())
+            .await
+            .expect("the context should report the disconnect")
+            .expect("the event channel should stay open");
+
+        assert!(connected.try_recv().is_err());
     }
 }
