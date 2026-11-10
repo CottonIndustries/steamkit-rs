@@ -10,10 +10,10 @@ SteamKit2 is based on commit `94812dc3` (**4.0.0-Beta.1**); the post-Beta.1 fixe
 |---|---|
 | C# spec | SteamKit2 4.0.0-Beta.1 (`94812dc3`) + fixes through `131fb033` (`4.0.0-Beta.2` + 8) |
 | Protobufs | SteamDatabase/Protobufs `bdb3957d` — 155 staged `.proto` |
-| Crate | `steamkit-rs` **1.0.1** (library name `steamkit`) |
+| Crate | `steamkit-rs` **1.0.2** (library name `steamkit`) |
 | MSRV / edition | 1.89 / 2021 |
-| Release | **v1.0.1** tagged and released 2026-11-09 (`CottonIndustries/steamkit-rs`) |
-| crates.io | 0.1.4 — 0.1.5, 1.0.0 and 1.0.1 are not published |
+| Release | **v1.0.2** tagged 2026-11-10, no GitHub release (`CottonIndustries/steamkit-rs`) |
+| crates.io | 0.1.4 — 0.1.5, 1.0.0, 1.0.1 and 1.0.2 are not published |
 | Tests | `cargo test --workspace --no-fail-fast` → **491 passed, 0 failed, 4 ignored** (75 binaries) |
 | Crypto stack | `rsa` 0.10.0, `hmac` 0.13.0, `sha1` 0.11.0 since 2026-11-09, one `digest` 0.11.3 |
 | `CURRENT_PROTOCOL` | 65581 |

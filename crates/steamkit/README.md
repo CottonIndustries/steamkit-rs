@@ -8,7 +8,7 @@ The package is `steamkit-rs` (the `steamkit` name was taken on crates.io), but t
 
 ```toml
 [dependencies]
-steamkit-rs = "1.0.1"
+steamkit-rs = "1.0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 

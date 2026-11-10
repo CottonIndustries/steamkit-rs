@@ -4,7 +4,7 @@ Steam protobuf messages and enums for Rust, generated with [`prost`](https://cra
 
 ```toml
 [dependencies]
-steamkit-rs-protos = "1.0.1"
+steamkit-rs-protos = "1.0.2"
 ```
 
 The library is called `steamkit_protos`:
@@ -23,7 +23,7 @@ All the features are on by default. Each of those modules is a lot of generated 
 
 ```toml
 [dependencies]
-steamkit-rs-protos = { version = "1.0.1", default-features = false, features = ["dota2"] }
+steamkit-rs-protos = { version = "1.0.2", default-features = false, features = ["dota2"] }
 ```
 
 ```rust

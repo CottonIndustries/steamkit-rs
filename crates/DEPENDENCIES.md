@@ -1,6 +1,6 @@
 # Dependencies and maintenance
 
-Last audited: **2026-11-09**. Crate **1.0.1**, MSRV **1.89**, edition 2021.
+Last audited: **2026-11-09**. Crate **1.0.2**, MSRV **1.89**, edition 2021.
 This file is the dependency inventory. Architecture is in `SUMMARY.md` and `DEVELOPER_GUIDE.md`;
 file locations are in `FILE_INDEX.md`.
 
