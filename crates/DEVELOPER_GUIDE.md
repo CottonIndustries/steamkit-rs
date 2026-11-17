@@ -60,7 +60,7 @@
     - [crates/steamkit/src/base/gc/client_msg_gc.rs — 299 lines](#cratessteamkitsrcbasegcclient_msg_gcrs--299-lines)
     - [crates/steamkit/src/base/gc/packet_base_gc.rs — 144 lines](#cratessteamkitsrcbasegcpacket_base_gcrs--144-lines)
     - [crates/steamkit/src/base/generated/steam_language_internal.rs — 1168 lines](#cratessteamkitsrcbasegeneratedsteam_language_internalrs--1168-lines)
-    - [crates/steamkit/src/base/generated/steam_language.rs — 18785 lines](#cratessteamkitsrcbasegeneratedsteam_languagers--18785-lines)
+    - [crates/steamkit/src/base/generated/steam_language.rs — 18803 lines](#cratessteamkitsrcbasegeneratedsteam_languagers--18803-lines)
   - [5.3 crates/steamkit/src/util/ — the helpers, and the vendored LZMA SDK](#53-cratessteamkitsrcutil--the-helpers-and-the-vendored-lzma-sdk)
     - [Conventions used throughout util/](#conventions-used-throughout-util)
     - [util/lzma/ — the vendored 7-Zip LZMA SDK (compress side only)](#utillzma--the-vendored-7-zip-lzma-sdk-compress-side-only)
@@ -84,7 +84,7 @@
     - [crates/steamkit/src/util/steam_kit_web_request_exception.rs — 119 lines](#cratessteamkitsrcutilsteam_kit_web_request_exceptionrs--119-lines)
     - [crates/steamkit/src/util/stream_helpers.rs — 222 lines](#cratessteamkitsrcutilstream_helpersrs--222-lines)
     - [crates/steamkit/src/util/task_extensions.rs — 81 lines](#cratessteamkitsrcutiltask_extensionsrs--81-lines)
-    - [crates/steamkit/src/util/utils.rs — 234 lines](#cratessteamkitsrcutilutilsrs--234-lines)
+    - [crates/steamkit/src/util/utils.rs — 258 lines](#cratessteamkitsrcutilutilsrs--258-lines)
     - [util/ — the decompression chain, the VZip delta, the stopwatch and the Windows helper](#util--the-decompression-chain-the-vzip-delta-the-stopwatch-and-the-windows-helper)
     - [crates/steamkit/src/util/value_stopwatch.rs — 38 lines](#cratessteamkitsrcutilvalue_stopwatchrs--38-lines)
     - [crates/steamkit/src/util/v_zip_delta_util.rs — 46 lines](#cratessteamkitsrcutilv_zip_delta_utilrs--46-lines)
@@ -1682,7 +1682,7 @@ every structure (`UdpHeader` = 36, `MsgHdr` = 20, `ExtendedClientMsgHdr` = 36,
 `MsgGCHdr` = 18, `MsgClientCreateChat` = 53, `MsgClientP2PIntroducerMessage` = 1466, …)
 and checks the byte-exact `UdpHeader` layout.
 
-#### `crates/steamkit/src/base/generated/steam_language.rs` — 18785 lines
+#### `crates/steamkit/src/base/generated/steam_language.rs` — 18803 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Base/Generated/SteamLanguage.cs` (the 91
 Valve-internal enums); for the `internal` module, the message and header classes of
 `SteamKit2/SteamKit2/Base/Generated/SteamLanguageInternal.cs`
@@ -2720,7 +2720,7 @@ through unchanged. `ignoring_cancellation(task, token)` is the free-function for
 * The trait method takes `self` by value, so it consumes the future; the free function takes it
   by value as well.
 
-#### `crates/steamkit/src/util/utils.rs` — 234 lines
+#### `crates/steamkit/src/util/utils.rs` — 258 lines
 **C# counterpart:** `SteamKit2/SteamKit2/Util/Utils.cs`
 **Purpose:** Hex encoding/decoding and the detection of the operating system, which Steam uses to
 fill the `EOSType` field of the logon request.
@@ -2746,10 +2746,10 @@ fill the `EOSType` field of the logon request.
 * **Linux** — `detect_linux_os_type()` reads `/proc/sys/kernel/osrelease` (which is what
   `Environment.OSVersion.Version` reports on Linux) and maps the kernel version to the
   `Linux22` … `Linux7x` values.
-* **macOS** — `detect_macos_os_type()` runs `sw_vers -productVersion` and converts the *product*
-  version into the *Darwin* version that `Environment.OSVersion` reports: product 10.x → Darwin
-  `minor + 4` (10.7 → 11, 10.15 → 19), product ≥ 11 → Darwin `major + 9` (11 → 20, 15 → 24).
-  The Darwin version is then mapped to `MacOS107` … `MacOS15`.
+* **macOS** — `detect_macos_os_type()` runs `sw_vers -productVersion` and maps the product
+  version directly, matching the current C#: 10.11–10.23 → `MacOS1011` … `MacOS1023`
+  (10.15 for any other 10.x), 11.0 → `MacOS11`, 11.x → `MacOS111`, 12–15 → `MacOS12` …
+  `MacOS15`, 26–28 → `MacOS26` … `MacOS28`.
 * Anything else → `EOSType::Unknown`.
 
 `parse_version(text)` splits a dotted version string into major/minor/build, ignoring a
@@ -2768,11 +2768,12 @@ non-numeric suffix such as the `-generic` of a Linux kernel release.
 * **The Rust falls back to `Windows10` when the Windows version cannot be determined.** The C#
   would have known the real version through `Environment.OSVersion`. The fallback is a
   deliberate choice ("report a modern Windows rather than an unknown platform").
-* The macOS product-to-Darwin conversion is the interesting part: `sw_vers` reports `15.2`,
-  while `Environment.OSVersion` on macOS reports the Darwin kernel version `24.2`. The
-  conversion `major + 9` / `minor + 4` reproduces that mapping exactly.
-* The `EOSType` variants are the Valve-defined ones; note that the protobuf enum spells some of
-  them inconsistently (`MacOS107` … `MacOS1012` versus `Macos1013` … `Macos1015`).
+* The macOS mapping now uses the product version, not the Darwin kernel version. `sw_vers`
+  reports `15.2` and `NSProcessInfo` reports the same product version; the old `major + 9` /
+  `minor + 4` conversion was wrong for the 10.16+ compatibility values and for 11.x.
+* The `EOSType` variants are the Valve-defined ones; note that the protobuf enum spells some
+  inconsistently (`MacOS107` … `MacOS1012` versus `Macos1013` … `Macos1015`). The current set
+  adds `MacOS1021`, `MacOS26`, `MacOS1022`, `MacOS27`, `MacOS1023` and `MacOS28`.
 * `Utils` is `pub(crate)`; the free functions `encode_hex_string`, `decode_hex_string` and
   `get_os_type` are the ones used elsewhere in the crate (17 call sites).
 

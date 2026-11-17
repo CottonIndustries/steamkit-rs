@@ -111,9 +111,9 @@ fn detect_windows_os_type() -> EOSType {
             _ => EOSType::WinUnknown,
         },
         6 => match minor {
-            0 => EOSType::WinVista, // Also Server 2008
-            1 => EOSType::Windows7, // Also Server 2008 R2
-            2 => EOSType::Windows8, // Also Server 2012
+            0 => EOSType::WinVista,  // Also Server 2008
+            1 => EOSType::Windows7,  // Also Server 2008 R2
+            2 => EOSType::Windows8,  // Also Server 2012
             3 => EOSType::Windows81, // Also Server 2012 R2
             _ => EOSType::WinUnknown,
         },
@@ -170,8 +170,7 @@ fn detect_linux_os_type() -> EOSType {
     }
 }
 
-/// Maps a macOS version (from `sw_vers`) to Valve's `EOSType`, by way of the
-/// matching Darwin kernel version.
+/// Maps a macOS product version (from `sw_vers`) to Valve's `EOSType`.
 #[cfg(target_os = "macos")]
 fn detect_macos_os_type() -> EOSType {
     let Some((product_major, product_minor, _)) = std::process::Command::new("sw_vers")
@@ -184,30 +183,35 @@ fn detect_macos_os_type() -> EOSType {
         return EOSType::MacOSUnknown;
     };
 
-    // macOS 10.x ships with the Darwin kernel version `minor + 4`
-    // (10.7 -> 11, 10.15 -> 19); macOS 11 and later use `major + 9`
-    // (11 -> 20, 15 -> 24).
-    let darwin_major = if product_major == 10 {
-        product_minor + 4
-    } else {
-        product_major + 9
-    };
+    map_macos_version(product_major, product_minor)
+}
 
-    match darwin_major {
-        11 => EOSType::MacOS107, // "Lion"
-        12 => EOSType::MacOS108, // "Mountain Lion"
-        13 => EOSType::MacOS109, // "Mavericks"
-        14 => EOSType::MacOS1010, // "Yosemite"
-        15 => EOSType::MacOS1011, // El Capitan
-        16 => EOSType::MacOS1012, // Sierra
-        17 => EOSType::Macos1013, // High Sierra
-        18 => EOSType::Macos1014, // Mojave
-        19 => EOSType::Macos1015, // Catalina
-        20 => EOSType::MacOS11, // Big Sur
-        21 => EOSType::MacOS12, // Monterey
-        22 => EOSType::MacOS13, // Ventura
-        23 => EOSType::MacOS14, // Sonoma
-        24 => EOSType::MacOS15, // Sequoia
+fn map_macos_version(major: u64, minor: u64) -> EOSType {
+    match major {
+        10 => match minor {
+            11 => EOSType::MacOS1011,
+            12 => EOSType::MacOS1012,
+            13 => EOSType::Macos1013,
+            14 => EOSType::Macos1014,
+            16 => EOSType::MacOS1016,
+            17 => EOSType::MacOS1017,
+            18 => EOSType::MacOS1018,
+            19 => EOSType::MacOS1019,
+            20 => EOSType::MacOS1020,
+            21 => EOSType::MacOS1021,
+            22 => EOSType::MacOS1022,
+            23 => EOSType::MacOS1023,
+            _ => EOSType::Macos1015,
+        },
+        11 if minor == 0 => EOSType::MacOS11,
+        11 => EOSType::MacOS111,
+        12 => EOSType::MacOS12,
+        13 => EOSType::MacOS13,
+        14 => EOSType::MacOS14,
+        15 => EOSType::MacOS15,
+        26 => EOSType::MacOS26,
+        27 => EOSType::MacOS27,
+        28 => EOSType::MacOS28,
         _ => EOSType::MacOSUnknown,
     }
 }
@@ -231,4 +235,24 @@ fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let build = parts.next().unwrap_or("0").trim().parse::<u64>().ok()?;
 
     Some((major, minor, build))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_macos_product_versions() {
+        assert_eq!(EOSType::MacOS1011, map_macos_version(10, 11));
+        assert_eq!(EOSType::Macos1015, map_macos_version(10, 15));
+        assert_eq!(EOSType::MacOS1016, map_macos_version(10, 16));
+        assert_eq!(EOSType::MacOS1021, map_macos_version(10, 21));
+        assert_eq!(EOSType::MacOS1023, map_macos_version(10, 23));
+        assert_eq!(EOSType::MacOS11, map_macos_version(11, 0));
+        assert_eq!(EOSType::MacOS111, map_macos_version(11, 1));
+        assert_eq!(EOSType::MacOS15, map_macos_version(15, 0));
+        assert_eq!(EOSType::MacOS26, map_macos_version(26, 0));
+        assert_eq!(EOSType::MacOS28, map_macos_version(28, 0));
+        assert_eq!(EOSType::MacOSUnknown, map_macos_version(99, 0));
+    }
 }
