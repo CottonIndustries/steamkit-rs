@@ -252,9 +252,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::web_socket_context::WebSocketReceive;
+    use super::super::web_socket_context::{WebSocketMessageType, WebSocketReceive};
     use super::*;
     use async_trait::async_trait;
+    use std::sync::atomic::AtomicUsize;
 
     struct NoopFactory;
 
@@ -287,6 +288,66 @@ mod tests {
 
         fn is_open(&self) -> bool {
             false
+        }
+    }
+
+    struct TextSocket;
+
+    #[async_trait]
+    impl WebSocketSocket for TextSocket {
+        async fn send_binary(&self, _data: Bytes) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        async fn receive(&self) -> Result<WebSocketReceive, SteamError> {
+            Ok(WebSocketReceive {
+                data: Bytes::from_static(b"hello"),
+                end_of_message: true,
+                message_type: WebSocketMessageType::Text,
+            })
+        }
+
+        async fn close(&self) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        fn is_open(&self) -> bool {
+            true
+        }
+    }
+
+    struct ChunkedTextSocket {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl WebSocketSocket for ChunkedTextSocket {
+        async fn send_binary(&self, _data: Bytes) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        async fn receive(&self) -> Result<WebSocketReceive, SteamError> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(WebSocketReceive {
+                    data: Bytes::from_static(b"part"),
+                    end_of_message: false,
+                    message_type: WebSocketMessageType::Binary,
+                })
+            } else {
+                Ok(WebSocketReceive {
+                    data: Bytes::from_static(b"hello"),
+                    end_of_message: true,
+                    message_type: WebSocketMessageType::Text,
+                })
+            }
+        }
+
+        async fn close(&self) -> Result<(), SteamError> {
+            Ok(())
+        }
+
+        fn is_open(&self) -> bool {
+            true
         }
     }
 
@@ -362,5 +423,39 @@ mod tests {
             .expect("the event channel should stay open");
 
         assert!(connected.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn text_message_disconnects() {
+        let connection = WebSocketConnection::new(Arc::new(NoopFactory));
+        let mut disconnected = connection.events.subscribe_disconnected();
+        let ctx = context(&connection, 1);
+
+        ctx.start(Arc::new(TextSocket));
+
+        let args = tokio::time::timeout(Duration::from_secs(1), disconnected.recv())
+            .await
+            .expect("the context should report the disconnect")
+            .expect("the event channel should stay open");
+
+        assert_eq!(DisconnectedEventArgs::new(false), args);
+    }
+
+    #[tokio::test]
+    async fn non_binary_chunk_mid_message_disconnects() {
+        let connection = WebSocketConnection::new(Arc::new(NoopFactory));
+        let mut disconnected = connection.events.subscribe_disconnected();
+        let ctx = context(&connection, 1);
+
+        ctx.start(Arc::new(ChunkedTextSocket {
+            calls: AtomicUsize::new(0),
+        }));
+
+        let args = tokio::time::timeout(Duration::from_secs(1), disconnected.recv())
+            .await
+            .expect("the context should report the disconnect")
+            .expect("the event channel should stay open");
+
+        assert_eq!(DisconnectedEventArgs::new(false), args);
     }
 }

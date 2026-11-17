@@ -153,8 +153,8 @@ from the top.
 | 144 | `crates/steamkit/src/networking/steam3/tcp_connection.rs` | 4059 | 323 |
 | 145 | `crates/steamkit/src/networking/steam3/udp_connection.rs` | 4132 | 727 |
 | 146 | `crates/steamkit/src/networking/steam3/udp_packet.rs` | 4090 | 413 |
-| 147 | `crates/steamkit/src/networking/steam3/web_socket_connection.rs` | 4199 | 366 |
-| 148 | `crates/steamkit/src/networking/steam3/web_socket_context.rs` | 4172 | 565 |
+| 147 | `crates/steamkit/src/networking/steam3/web_socket_connection.rs` | 4199 | 461 |
+| 148 | `crates/steamkit/src/networking/steam3/web_socket_context.rs` | 4172 | 568 |
 | 149 | `crates/steamkit/src/steam/authentication/access_token_generate_result.rs` | 6663 | 24 |
 | 150 | `crates/steamkit/src/steam/authentication/auth_poll_result.rs` | 6653 | 33 |
 | 151 | `crates/steamkit/src/steam/authentication/auth_session.rs` | 6523 | 413 |

@@ -211,7 +211,8 @@ impl WebSocketContext {
                         };
 
                         if next.message_type != WebSocketMessageType::Binary {
-                            break;
+                            self.notify_disconnected(false);
+                            return;
                         }
 
                         message.extend_from_slice(&next.data);
@@ -233,6 +234,8 @@ impl WebSocketContext {
                         "WebSocketContext: Received websocket text message: \"{}\"",
                         String::from_utf8_lossy(&received.data)
                     );
+                    self.notify_disconnected(false);
+                    return;
                 }
                 WebSocketMessageType::Close => {
                     self.notify_disconnected(false);
